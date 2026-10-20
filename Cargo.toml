@@ -1,0 +1,10 @@
+[package]
+name = "sdk"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ai-sdk = { path = "libs/ai-sdk" }
+config = { version = "0.15", default-features = false, features = ["toml"] }
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1.54.0", features = ["full"] }

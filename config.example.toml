@@ -1,0 +1,14 @@
+# Copy to config.toml and keep only the providers you use.
+# Prefer environment variables for secrets, e.g. SDK__OPENAI__API_KEY.
+
+[openai]
+api_key = "your-openai-api-key"
+model = "gpt-4.1"
+
+[openrouter]
+api_key = "your-openrouter-api-key"
+model = "openai/gpt-4.1"
+
+[anthropic]
+api_key = "your-anthropic-api-key"
+model = "claude-sonnet-4-5"
