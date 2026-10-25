@@ -1,0 +1,86 @@
+//! Typed executable tools, with an optional `macros` feature for `#[tool]`.
+//!
+//! ```toml
+//! tool = { path = "../tool", features = ["macros"] }
+//! ```
+
+pub use async_trait::async_trait;
+#[cfg(feature = "macros")]
+pub use tool_macros::tool;
+
+#[doc(hidden)]
+pub mod __private {
+    pub use schemars;
+    pub use serde;
+}
+
+use schemars::JsonSchema;
+use serde::{Serialize, de::DeserializeOwned};
+use serde_json::Value;
+
+/// Provider-independent metadata describing a tool's JSON input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolDefinition {
+    pub name: String,
+    pub description: String,
+    pub parameters: Value,
+}
+
+/// A typed tool with JSON input/output schemas and asynchronous execution.
+///
+/// Inputs must be owned, deserializable values. Outputs must implement
+/// `Serialize` and `JsonSchema`; custom types can derive these traits.
+#[crate::async_trait]
+pub trait Tool: Send + Sync {
+    type Input: DeserializeOwned + JsonSchema + Send;
+    type Output: Serialize + JsonSchema + Send;
+
+    fn name(&self) -> &str;
+    fn description(&self) -> &str;
+
+    fn parameters(&self) -> Value {
+        schemars::schema_for!(Self::Input).to_value()
+    }
+
+    fn return_type(&self) -> Value {
+        schemars::schema_for!(Self::Output).to_value()
+    }
+
+    /// Provider-independent metadata for registering this tool.
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name().into(),
+            description: self.description().into(),
+            parameters: self.parameters(),
+        }
+    }
+
+    async fn call(&self, input: Self::Input) -> Self::Output;
+
+    /// Deserialize arguments, execute the function, and serialize its result.
+    async fn execute(&self, arguments: Value) -> serde_json::Result<Value> {
+        let input = serde_json::from_value(arguments)?;
+        serde_json::to_value(self.call(input).await)
+    }
+}
+
+/// JSON-based interface for storing tools with different Rust input/output types.
+///
+/// Every `Tool` automatically implements this trait; use `Box<dyn DynTool>`
+/// when building a heterogeneous collection of executable tools.
+#[crate::async_trait]
+pub trait DynTool: Send + Sync {
+    fn definition(&self) -> ToolDefinition;
+    async fn execute(&self, arguments: Value) -> serde_json::Result<Value>;
+}
+
+#[crate::async_trait]
+impl<T: Tool> DynTool for T {
+    fn definition(&self) -> ToolDefinition {
+        Tool::definition(self)
+    }
+
+    async fn execute(&self, arguments: Value) -> serde_json::Result<Value> {
+        Tool::execute(self, arguments).await
+    }
+}
