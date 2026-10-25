@@ -312,8 +312,8 @@ impl GenerateRequest {
         }
     }
 
-    pub fn with_tools(mut self, tools: impl IntoIterator<Item = Tool>) -> Self {
-        self.tools = tools.into_iter().collect();
+    pub fn with_tools<T: Into<Tool>>(mut self, tools: impl IntoIterator<Item = T>) -> Self {
+        self.tools = tools.into_iter().map(Into::into).collect();
 
         self
     }
