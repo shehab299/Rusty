@@ -1,9 +1,11 @@
-use std::{io, time::Duration};
+use std::io;
 
 use crate::comms::{Command, Event};
-use crossterm::event::{self, Event as TerminalEvent, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{Event as TerminalEvent, EventStream, KeyCode, KeyEventKind, KeyModifiers};
+use futures_util::{StreamExt};
 use ratatui::{
-    DefaultTerminal, Frame,
+    Frame, Terminal,
+    backend::Backend,
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -11,7 +13,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Widget},
 };
 use ratatui_textarea::{Input, TextArea};
-use tokio::sync::mpsc::{Receiver, Sender, error::TryRecvError};
+use tokio::sync::mpsc::{Receiver, Sender};
 use types::{AssistantMessage, Print, ToolCallMessage, ToolResultMessage, UserMessage};
 
 mod types;
@@ -59,12 +61,15 @@ impl Default for App {
 
 impl App {
     fn handle_event(&mut self, event: TerminalEvent, commands: &Sender<Command>) {
+        
         let TerminalEvent::Key(key) = event else {
             return;
         };
+        
         if key.kind == KeyEventKind::Release {
             return;
         }
+        
         match (key.code, key.modifiers) {
             (KeyCode::Char('c'), KeyModifiers::CONTROL) => self.should_quit = true,
             (KeyCode::Esc, _) if self.busy => {
@@ -137,34 +142,40 @@ impl Drop for RestoreTerminal {
     }
 }
 
-/// Run the terminal UI on a blocking thread, communicating with an async agent.
-pub fn run(commands: Sender<Command>, mut events: Receiver<Event>) -> io::Result<()> {
+/// Run the terminal UI, awaiting terminal input and agent events concurrently.
+pub async fn run(commands: Sender<Command>, mut events: Receiver<Event>) -> io::Result<()> {
     let terminal = ratatui::try_init()?;
     let _restore = RestoreTerminal;
-    run_terminal(terminal, &commands, &mut events)
+    run_terminal(terminal, &commands, &mut events).await
 }
 
-fn run_terminal(
-    mut terminal: DefaultTerminal,
+async fn run_terminal<B: Backend>(
+    mut terminal: Terminal<B>,
     commands: &Sender<Command>,
-    events: &mut Receiver<Event>,
+    events: &mut Receiver<Event>
 ) -> io::Result<()> {
+
     let mut app = App::default();
+    let mut terminal_events = EventStream::new();
 
     while !app.should_quit {
-        loop {
-            match events.try_recv() {
-                Ok(event) => app.handle_agent_event(event),
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => return Ok(()),
-            }
-        }
-        terminal.draw(|f| render(f, &mut app))?;
+        
+        terminal
+            .draw(|f| render(f, &mut app))
+            .map_err(|error| io::Error::other(error.to_string()))?;
 
-        if event::poll(Duration::from_millis(100))? {
-            let event = event::read()?;
-            app.handle_event(event, commands);
+        tokio::select! {
+            event = events.recv() => match event {
+                Some(event) => app.handle_agent_event(event),
+                None => break,
+            },
+            event = terminal_events.next() => match event {
+                Some(Ok(event)) => app.handle_event(event, commands),
+                Some(Err(error)) => return Err(error),
+                None => break,
+            },
         }
+
     }
 
     Ok(())

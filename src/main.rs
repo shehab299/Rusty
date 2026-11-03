@@ -12,6 +12,7 @@ mod tui;
 
 #[tokio::main]
 async fn main() -> Result<(), ModelError> {
+    
     let config = AppConfig::load()?;
 
     let (commands_tx, commands_rx) = mpsc::channel::<Command>(100);
@@ -31,25 +32,18 @@ async fn main() -> Result<(), ModelError> {
     )?;
 
     let agent_task = tokio::spawn(async move { agent.run(&model).await });
-    let terminal_result = run_terminal(commands_tx, events_rx).await;
 
+
+    let terminal_result = tui::run(commands_tx.clone(), events_rx).await;
+    let _ = commands_tx.send(Command::Shutdown).await;
+    
     let agent_result = agent_task.await?;
-
     terminal_result?;
-    // The UI drops its event receiver when it exits, even during an active turn.
+
     match agent_result {
         Err(error) if error.is::<mpsc::error::SendError<Event>>() => Ok(()),
         result => result,
     }
+
 }
 
-async fn run_terminal(
-    commands_tx: mpsc::Sender<Command>,
-    events_rx: mpsc::Receiver<Event>,
-) -> Result<(), ModelError> {
-    let ui_commands = commands_tx.clone();
-    let result = tokio::task::spawn_blocking(move || tui::run(ui_commands, events_rx)).await;
-    let _ = commands_tx.send(Command::Shutdown).await;
-    result??;
-    Ok(())
-}
