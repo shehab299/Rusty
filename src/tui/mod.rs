@@ -2,10 +2,9 @@ use std::io;
 
 use crate::comms::{Command, Event};
 use crossterm::event::{Event as TerminalEvent, EventStream, KeyCode, KeyEventKind, KeyModifiers};
-use futures_util::{StreamExt};
+use futures_util::StreamExt;
 use ratatui::{
-    Frame, Terminal,
-    backend::Backend,
+    DefaultTerminal, Frame,
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -61,15 +60,14 @@ impl Default for App {
 
 impl App {
     fn handle_event(&mut self, event: TerminalEvent, commands: &Sender<Command>) {
-        
         let TerminalEvent::Key(key) = event else {
             return;
         };
-        
+
         if key.kind == KeyEventKind::Release {
             return;
         }
-        
+
         match (key.code, key.modifiers) {
             (KeyCode::Char('c'), KeyModifiers::CONTROL) => self.should_quit = true,
             (KeyCode::Esc, _) if self.busy => {
@@ -134,51 +132,57 @@ impl App {
     }
 }
 
-struct RestoreTerminal;
+struct Term {
+    terminal: DefaultTerminal,
+    commands_tx: Sender<Command>,
+    events_rx: Receiver<Event>,
+}
 
-impl Drop for RestoreTerminal {
+impl Term {
+    fn new(commands: Sender<Command>, events: Receiver<Event>) -> Self {
+        Self {
+            terminal: ratatui::init(),
+            commands_tx: commands,
+            events_rx: events,
+        }
+    }
+
+    async fn run(&mut self) -> io::Result<()> {
+        let mut app = App::default();
+        let mut terminal_events = EventStream::new();
+
+        while !app.should_quit {
+            self.terminal
+                .draw(|f| render(f, &mut app))
+                .map_err(|error| io::Error::other(error.to_string()))?;
+
+            tokio::select! {
+                event = self.events_rx.recv() => match event {
+                    Some(event) => app.handle_agent_event(event),
+                    None => break,
+                },
+                event = terminal_events.next() => match event {
+                    Some(Ok(event)) => app.handle_event(event, &self.commands_tx),
+                    Some(Err(error)) => return Err(error),
+                    None => break,
+                },
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl Drop for Term {
     fn drop(&mut self) {
         ratatui::restore();
     }
 }
 
-/// Run the terminal UI, awaiting terminal input and agent events concurrently.
-pub async fn run(commands: Sender<Command>, mut events: Receiver<Event>) -> io::Result<()> {
-    let terminal = ratatui::try_init()?;
-    let _restore = RestoreTerminal;
-    run_terminal(terminal, &commands, &mut events).await
-}
 
-async fn run_terminal<B: Backend>(
-    mut terminal: Terminal<B>,
-    commands: &Sender<Command>,
-    events: &mut Receiver<Event>
-) -> io::Result<()> {
-
-    let mut app = App::default();
-    let mut terminal_events = EventStream::new();
-
-    while !app.should_quit {
-        
-        terminal
-            .draw(|f| render(f, &mut app))
-            .map_err(|error| io::Error::other(error.to_string()))?;
-
-        tokio::select! {
-            event = events.recv() => match event {
-                Some(event) => app.handle_agent_event(event),
-                None => break,
-            },
-            event = terminal_events.next() => match event {
-                Some(Ok(event)) => app.handle_event(event, commands),
-                Some(Err(error)) => return Err(error),
-                None => break,
-            },
-        }
-
-    }
-
-    Ok(())
+pub async fn run(commands: Sender<Command>, events: Receiver<Event>) -> io::Result<()> {
+    let mut term = Term::new(commands, events);
+    term.run().await
 }
 
 fn render(f: &mut Frame, app: &mut App) {
@@ -205,14 +209,14 @@ fn render(f: &mut Frame, app: &mut App) {
 
     render_footer(f, footer_area, app);
     render_prompt(f, prompt_area, &mut app.prompt);
-    render_messages_widget(f, messages_area, app);
+    render_messages(f, messages_area, app);
 }
 
 fn render_prompt(f: &mut Frame, area: Rect, prompt: &mut TextArea) {
     f.render_widget(&*prompt, area);
 }
 
-fn render_messages_widget(f: &mut Frame, area: Rect, app: &mut App) {
+fn render_messages(f: &mut Frame, area: Rect, app: &mut App) {
     let mut text = Text::default();
 
     text.extend(Text::styled(LOGO, Style::default().fg(Color::Cyan)));
@@ -305,3 +309,5 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
         area,
     );
 }
+
+

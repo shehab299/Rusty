@@ -12,7 +12,6 @@ mod tui;
 
 #[tokio::main]
 async fn main() -> Result<(), ModelError> {
-    
     let config = AppConfig::load()?;
 
     let (commands_tx, commands_rx) = mpsc::channel::<Command>(100);
@@ -33,10 +32,9 @@ async fn main() -> Result<(), ModelError> {
 
     let agent_task = tokio::spawn(async move { agent.run(&model).await });
 
-
     let terminal_result = tui::run(commands_tx.clone(), events_rx).await;
     let _ = commands_tx.send(Command::Shutdown).await;
-    
+
     let agent_result = agent_task.await?;
     terminal_result?;
 
@@ -44,6 +42,4 @@ async fn main() -> Result<(), ModelError> {
         Err(error) if error.is::<mpsc::error::SendError<Event>>() => Ok(()),
         result => result,
     }
-
 }
-
