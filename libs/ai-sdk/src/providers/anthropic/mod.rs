@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use reqwest::header::HeaderValue;
 
-use super::{Model, ModelError};
+use super::{Provider, ModelError};
 use crate::{GenerateRequest, GenerateResponse, async_trait};
 
 mod options;
@@ -29,25 +29,23 @@ const API_VERSION: &str = "2023-06-01";
 pub struct Anthropic {
     client: reqwest::Client,
     api_key: HeaderValue,
-    model: String,
 }
 
 impl Anthropic {
     /// Requests time out after 120 seconds; connections after 10 seconds.
-    pub fn new(api_key: impl AsRef<str>, model: impl Into<String>) -> Result<Self, AnthropicError> {
+    pub fn new(api_key: impl AsRef<str>) -> Result<Self, AnthropicError> {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(120))
             .build()
             .map_err(AnthropicError::Transport)?;
 
-        Self::with_client(api_key, model, client)
+        Self::with_client(api_key, client)
     }
 
     /// Supply a custom HTTP client for timeouts, proxies, TLS, or beta headers.
     pub fn with_client(
         api_key: impl AsRef<str>,
-        model: impl Into<String>,
         client: reqwest::Client,
     ) -> Result<Self, AnthropicError> {
         let api_key = api_key.as_ref();
@@ -61,24 +59,17 @@ impl Anthropic {
         })?;
         api_key.set_sensitive(true);
 
-        let model = model.into();
-
-        if model.trim().is_empty() {
-            return Err(AnthropicError::Configuration("model ID must not be empty"));
-        }
-
         Ok(Self {
             client,
             api_key,
-            model,
         })
     }
 }
 
 #[async_trait]
-impl Model for Anthropic {
+impl Provider for Anthropic {
     async fn generate(&self, request: GenerateRequest) -> Result<GenerateResponse, ModelError> {
-        let request = AnthropicMessagesRequest::try_from((self.model.clone(), request))?;
+        let request = AnthropicMessagesRequest::try_from(request)?;
         let response = self
             .client
             .post(ENDPOINT)

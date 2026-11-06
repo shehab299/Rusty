@@ -1,6 +1,6 @@
 #![doc = include_str!("../README.md")]
 
-use crate::providers::{Model, ModelError};
+use crate::providers::{Provider, ModelError};
 
 pub mod providers;
 mod types;
@@ -13,8 +13,8 @@ pub use types::{
 };
 
 pub async fn generate_text(
-    model: &dyn Model,
+    provider: &dyn Provider,
     request: GenerateRequest,
 ) -> Result<GenerateResponse, ModelError> {
-    model.generate(request).await
+    provider.generate(request).await
 }

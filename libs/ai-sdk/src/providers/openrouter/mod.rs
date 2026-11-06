@@ -5,7 +5,7 @@ use std::time::Duration;
 use reqwest::header::HeaderValue;
 use serde_json::Value;
 
-use super::{Model, ModelError};
+use super::{Provider, ModelError};
 use crate::{GenerateRequest, GenerateResponse, async_trait};
 
 mod options;
@@ -30,7 +30,6 @@ const ENDPOINT: &str = "https://openrouter.ai/api/v1/chat/completions";
 pub struct OpenRouter {
     client: reqwest::Client,
     authorization: HeaderValue,
-    model: String,
     endpoint: String,
 }
 
@@ -38,7 +37,6 @@ impl OpenRouter {
     /// Requests time out after 120 seconds; connections time out after 10 seconds.
     pub fn new(
         api_key: impl AsRef<str>,
-        model: impl Into<String>,
     ) -> Result<Self, OpenRouterError> {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
@@ -46,13 +44,12 @@ impl OpenRouter {
             .build()
             .map_err(OpenRouterError::Transport)?;
 
-        Self::with_client(api_key, model, client)
+        Self::with_client(api_key, client)
     }
 
     /// Use a custom HTTP client to configure timeouts, proxies, or TLS.
     pub fn with_client(
         api_key: impl AsRef<str>,
-        model: impl Into<String>,
         client: reqwest::Client,
     ) -> Result<Self, OpenRouterError> {
         let api_key = api_key.as_ref();
@@ -67,26 +64,19 @@ impl OpenRouter {
             })?;
         authorization.set_sensitive(true);
 
-        let model = model.into();
-
-        if model.trim().is_empty() {
-            return Err(OpenRouterError::Configuration("model ID must not be empty"));
-        }
-
         Ok(Self {
             client,
             authorization,
-            model,
             endpoint: ENDPOINT.into(),
         })
     }
 }
 
 #[async_trait]
-impl Model for OpenRouter {
+impl Provider for OpenRouter {
     async fn generate(&self, request: GenerateRequest) -> Result<GenerateResponse, ModelError> {
         let request_body =
-            OpenRouterChatCompletionRequest::try_from((self.model.clone(), request))?;
+            OpenRouterChatCompletionRequest::try_from(request)?;
         let response = self
             .client
             .post(&self.endpoint)

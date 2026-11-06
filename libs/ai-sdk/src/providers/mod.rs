@@ -5,7 +5,7 @@ use crate::{GenerateRequest, GenerateResponse, async_trait};
 pub type ModelError = Box<dyn Error + Send + Sync + 'static>;
 
 #[async_trait]
-pub trait Model: Send + Sync {
+pub trait Provider: Send + Sync {
     async fn generate(&self, request: GenerateRequest) -> Result<GenerateResponse, ModelError>;
 }
 

@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use reqwest::header::HeaderValue;
 
-use super::{Model, ModelError};
+use super::{Provider, ModelError};
 use crate::{GenerateRequest, GenerateResponse, async_trait};
 
 mod options;
@@ -25,26 +25,24 @@ const ENDPOINT: &str = "https://api.openai.com/v1/chat/completions";
 pub struct OpenAI {
     client: reqwest::Client,
     authorization: HeaderValue,
-    model: String,
     endpoint: String,
 }
 
 impl OpenAI {
-    pub fn new(api_key: impl AsRef<str>, model: impl Into<String>) -> Result<Self, OpenAIError> {
+    pub fn new(api_key: impl AsRef<str>) -> Result<Self, OpenAIError> {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(120))
             .build()
             .map_err(OpenAIError::Transport)?;
 
-        Self::with_client(api_key, model, client)
+        Self::with_client(api_key, client)
     }
 
     /// Supply a custom client for timeouts, proxies, TLS, or default headers
     /// such as `OpenAI-Organization` and `OpenAI-Project`.
     pub fn with_client(
         api_key: impl AsRef<str>,
-        model: impl Into<String>,
         client: reqwest::Client,
     ) -> Result<Self, OpenAIError> {
         let api_key = api_key.as_ref();
@@ -59,32 +57,24 @@ impl OpenAI {
             })?;
         authorization.set_sensitive(true);
 
-        let model = model.into();
-
-        if model.trim().is_empty() {
-            return Err(OpenAIError::Configuration("model ID must not be empty"));
-        }
-
         Ok(Self {
             client,
             authorization,
-            model,
             endpoint: ENDPOINT.into(),
         })
     }
 }
 
 #[async_trait]
-impl Model for OpenAI {
+impl Provider for OpenAI {
     async fn generate(&self, request: GenerateRequest) -> Result<GenerateResponse, ModelError> {
         let response = self
             .client
             .post(&self.endpoint)
             .header(reqwest::header::AUTHORIZATION, self.authorization.clone())
-            .json(&OpenAIChatCompletionRequest::try_from((
-                self.model.clone(),
+            .json(&OpenAIChatCompletionRequest::try_from(
                 request,
-            ))?)
+            )?)
             .send()
             .await
             .map_err(OpenAIError::Transport)?;

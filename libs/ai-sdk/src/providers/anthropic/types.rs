@@ -26,10 +26,10 @@ pub(super) struct AnthropicMessagesRequest {
     options: AnthropicOptions,
 }
 
-impl TryFrom<(String, GenerateRequest)> for AnthropicMessagesRequest {
+impl TryFrom<GenerateRequest> for AnthropicMessagesRequest {
     type Error = AnthropicError;
 
-    fn try_from((model, request): (String, GenerateRequest)) -> Result<Self, Self::Error> {
+    fn try_from(request: GenerateRequest) -> Result<Self, Self::Error> {
         let options = match request.provider_options {
             None => AnthropicOptions::default(),
             Some(ProviderOptions::Anthropic(options)) => options,
@@ -120,7 +120,7 @@ impl TryFrom<(String, GenerateRequest)> for AnthropicMessagesRequest {
         }
 
         Ok(Self {
-            model,
+            model: request.model,
             messages,
             system,
             tools: request.tools.into_iter().map(FunctionTool::from).collect(),

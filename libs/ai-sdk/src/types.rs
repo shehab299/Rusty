@@ -292,6 +292,7 @@ pub enum ToolChoice {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct GenerateRequest {
+    pub model: String,
     pub messages: Vec<Message>,
     pub tools: Vec<Tool>,
     pub tool_choice: Option<ToolChoice>,
@@ -299,12 +300,13 @@ pub struct GenerateRequest {
 }
 
 impl GenerateRequest {
-    pub fn new(prompt: impl Into<String>) -> Self {
-        Self::from_messages([Message::user(UserContent::Text(prompt.into()))])
+    pub fn new(model: impl Into<String>, prompt: impl Into<String>) -> Self {
+        Self::from_messages(model, [Message::user(UserContent::Text(prompt.into()))])
     }
 
-    pub fn from_messages(messages: impl IntoIterator<Item = Message>) -> Self {
+    pub fn from_messages(model: impl Into<String>, messages: impl IntoIterator<Item = Message>) -> Self {
         Self {
+            model: model.into(),
             messages: messages.into_iter().collect(),
             tools: Vec::new(),
             tool_choice: None,

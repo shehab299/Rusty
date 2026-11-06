@@ -30,10 +30,10 @@ pub(super) struct OpenRouterChatCompletionRequest {
     options: OpenRouterOptions,
 }
 
-impl TryFrom<(String, GenerateRequest)> for OpenRouterChatCompletionRequest {
+impl TryFrom<GenerateRequest> for OpenRouterChatCompletionRequest {
     type Error = OpenRouterError;
 
-    fn try_from((model, request): (String, GenerateRequest)) -> Result<Self, Self::Error> {
+    fn try_from(request: GenerateRequest) -> Result<Self, Self::Error> {
         let options = match request.provider_options {
             None => OpenRouterOptions::default(),
             Some(ProviderOptions::OpenRouter(options)) => options,
@@ -46,7 +46,7 @@ impl TryFrom<(String, GenerateRequest)> for OpenRouterChatCompletionRequest {
         options.validate()?;
 
         Ok(Self {
-            model,
+            model:request.model,
             messages: request
                 .messages
                 .into_iter()

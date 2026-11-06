@@ -24,10 +24,10 @@ pub(super) struct OpenAIChatCompletionRequest {
     options: OpenAIOptions,
 }
 
-impl TryFrom<(String, GenerateRequest)> for OpenAIChatCompletionRequest {
+impl TryFrom<GenerateRequest> for OpenAIChatCompletionRequest {
     type Error = OpenAIError;
 
-    fn try_from((model, request): (String, GenerateRequest)) -> Result<Self, Self::Error> {
+    fn try_from(request: GenerateRequest) -> Result<Self, Self::Error> {
         let options = match request.provider_options {
             None => OpenAIOptions::default(),
             Some(ProviderOptions::OpenAI(options)) => options,
@@ -41,7 +41,7 @@ impl TryFrom<(String, GenerateRequest)> for OpenAIChatCompletionRequest {
         options.validate()?;
 
         Ok(Self {
-            model,
+            model: request.model,
             messages: request
                 .messages
                 .into_iter()
