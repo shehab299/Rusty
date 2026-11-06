@@ -14,7 +14,6 @@ use tokio::sync::mpsc::{Receiver, Sender};
 mod components;
 
 pub struct Tui {
-    terminal: DefaultTerminal,
     commands_tx: Sender<Command>,
     events_rx: Receiver<Event>,
     messages: MessagesComponent,
@@ -27,7 +26,6 @@ pub struct Tui {
 impl Tui {
     pub fn new(commands: Sender<Command>, events: Receiver<Event>) -> Self {
         Self {
-            terminal: ratatui::init(),
             commands_tx: commands,
             events_rx: events,
             messages: MessagesComponent::default(),
@@ -122,11 +120,12 @@ impl Tui {
     }
 
     pub async fn run(&mut self) -> io::Result<()> {
+        let mut terminal = ratatui::init();
         let mut terminal_events = EventStream::new();
 
         while !self.should_quit {
-            self.terminal
-                .draw(|f| render(f, &self.messages, &self.prompt, &self.footer))
+            terminal
+                .draw(|f| self.render(f, f.area()))
                 .map_err(|error| io::Error::other(error.to_string()))?;
 
             tokio::select! {
@@ -152,23 +151,20 @@ impl Drop for Tui {
     }
 }
 
-fn render(
-    f: &mut Frame,
-    messages: &MessagesComponent,
-    prompt: &PromptComponent,
-    footer: &FooterComponent,
-) {
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Fill(1),
-            Constraint::Length(prompt.height(f.area().height)),
-            Constraint::Length(1),
-        ]);
+impl Render for Tui {
+    fn render(&self, f: &mut Frame, area: ratatui::prelude::Rect) {
+        let layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Fill(1),
+                Constraint::Length(self.prompt.height(f.area().height)),
+                Constraint::Length(1),
+            ]);
 
-    let areas = layout.split(f.area());
+        let areas = layout.split(f.area());
 
-    footer.render(f, areas[2]);
-    prompt.render(f, areas[1]);
-    messages.render(f, areas[0]);
+        self.footer.render(f, areas[2]);
+        self.prompt.render(f, areas[1]);
+        self.messages.render(f, areas[0]);
+    }
 }
