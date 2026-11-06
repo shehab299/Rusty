@@ -13,7 +13,10 @@ use tokio::sync::mpsc::{Receiver, Sender};
 
 mod components;
 
-struct App {
+pub struct Tui {
+    terminal: DefaultTerminal,
+    commands_tx: Sender<Command>,
+    events_rx: Receiver<Event>,
     messages: MessagesComponent,
     prompt: PromptComponent,
     footer: FooterComponent,
@@ -21,9 +24,12 @@ struct App {
     should_quit: bool,
 }
 
-impl Default for App {
-    fn default() -> Self {
+impl Tui {
+    pub fn new(commands: Sender<Command>, events: Receiver<Event>) -> Self {
         Self {
+            terminal: ratatui::init(),
+            commands_tx: commands,
+            events_rx: events,
             messages: MessagesComponent::default(),
             prompt: PromptComponent::new(),
             footer: FooterComponent::new(),
@@ -31,10 +37,8 @@ impl Default for App {
             should_quit: false,
         }
     }
-}
 
-impl App {
-    fn handle_terminal_event(&mut self, event: TerminalEvent, commands: &Sender<Command>) {
+    pub fn handle_terminal_event(&mut self, event: TerminalEvent) {
         let TerminalEvent::Key(key) = event else {
             return;
         };
@@ -46,7 +50,7 @@ impl App {
         match (key.code, key.modifiers) {
             (KeyCode::Char('c'), KeyModifiers::CONTROL) => self.should_quit = true,
             (KeyCode::Esc, _) if self.busy => {
-                if let Err(error) = commands.try_send(Command::Cancel) {
+                if let Err(error) = self.commands_tx.try_send(Command::Cancel) {
                     self.footer.set_status(error.to_string());
                 }
             }
@@ -60,7 +64,10 @@ impl App {
                 if content.trim().is_empty() || self.busy {
                     return;
                 }
-                match commands.try_send(Command::SubmitPrompt(content.clone())) {
+                match self
+                    .commands_tx
+                    .try_send(Command::SubmitPrompt(content.clone()))
+                {
                     Ok(()) => {
                         self.messages.push(MessageComponent::User { content });
                         self.prompt.clear();
@@ -77,7 +84,7 @@ impl App {
         }
     }
 
-    fn handle_agent_event(&mut self, event: Event) {
+    pub fn handle_agent_event(&mut self, event: Event) {
         match event {
             Event::Started => {
                 self.busy = true;
@@ -113,39 +120,22 @@ impl App {
             }),
         }
     }
-}
 
-struct Term {
-    terminal: DefaultTerminal,
-    commands_tx: Sender<Command>,
-    events_rx: Receiver<Event>,
-}
-
-impl Term {
-    fn new(commands: Sender<Command>, events: Receiver<Event>) -> Self {
-        Self {
-            terminal: ratatui::init(),
-            commands_tx: commands,
-            events_rx: events,
-        }
-    }
-
-    async fn run(&mut self) -> io::Result<()> {
-        let mut app = App::default();
+    pub async fn run(&mut self) -> io::Result<()> {
         let mut terminal_events = EventStream::new();
 
-        while !app.should_quit {
+        while !self.should_quit {
             self.terminal
-                .draw(|f| render(f, &app))
+                .draw(|f| render(f, &self.messages, &self.prompt, &self.footer))
                 .map_err(|error| io::Error::other(error.to_string()))?;
 
             tokio::select! {
                 event = self.events_rx.recv() => match event {
-                    Some(event) => app.handle_agent_event(event),
+                    Some(event) => self.handle_agent_event(event),
                     None => break,
                 },
                 event = terminal_events.next() => match event {
-                    Some(Ok(event)) => app.handle_terminal_event(event, &self.commands_tx),
+                    Some(Ok(event)) => self.handle_terminal_event(event),
                     Some(Err(error)) => return Err(error),
                     None => break,
                 },
@@ -156,29 +146,29 @@ impl Term {
     }
 }
 
-impl Drop for Term {
+impl Drop for Tui {
     fn drop(&mut self) {
         ratatui::restore();
     }
 }
 
-pub async fn run(commands: Sender<Command>, events: Receiver<Event>) -> io::Result<()> {
-    let mut term = Term::new(commands, events);
-    term.run().await
-}
-
-fn render(f: &mut Frame, app: &App) {
+fn render(
+    f: &mut Frame,
+    messages: &MessagesComponent,
+    prompt: &PromptComponent,
+    footer: &FooterComponent,
+) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Fill(1),
-            Constraint::Length(app.prompt.height(f.area().height)),
+            Constraint::Length(prompt.height(f.area().height)),
             Constraint::Length(1),
         ]);
 
     let areas = layout.split(f.area());
 
-    app.footer.render(f, areas[2]);
-    app.prompt.render(f, areas[1]);
-    app.messages.render(f, areas[0]);
+    footer.render(f, areas[2]);
+    prompt.render(f, areas[1]);
+    messages.render(f, areas[0]);
 }

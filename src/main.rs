@@ -3,6 +3,7 @@ use crate::{agent::Agent, config::AppConfig, registry::get_tools};
 use ai_sdk::providers::{ModelError, OpenRouter};
 use comms::{Command, Event};
 use tokio::sync::mpsc;
+use tui::Tui;
 
 mod agent;
 mod comms;
@@ -32,7 +33,10 @@ async fn main() -> Result<(), ModelError> {
 
     let agent_task = tokio::spawn(async move { agent.run(&model).await });
 
-    let terminal_result = tui::run(commands_tx.clone(), events_rx).await;
+    let terminal_result = {
+        let mut tui = Tui::new(commands_tx.clone(), events_rx);
+        tui.run().await
+    };
     let _ = commands_tx.send(Command::Shutdown).await;
 
     let agent_result = agent_task.await?;
