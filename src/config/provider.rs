@@ -1,6 +1,5 @@
 //! Providers supported by this application, independently of the SDK's catalog.
 
-use ai_sdk::providers::{Anthropic, ModelError, OpenAI, OpenRouter, Provider};
 use serde::Deserialize;
 use std::{fmt, str::FromStr};
 
@@ -14,20 +13,14 @@ pub struct ProvidersConfig {
 }
 
 impl ProvidersConfig {
-    pub fn settings(&self, id: ProviderId) -> Option<ProviderConfig> {
-        match id {
-            ProviderId::OpenAI => self.openai.clone().map(ProviderConfig::OpenAI),
-            ProviderId::OpenRouter => self.openrouter.clone().map(ProviderConfig::OpenRouter),
-            ProviderId::Anthropic => self.anthropic.clone().map(ProviderConfig::Anthropic),
-        }
-    }
-
-    pub fn configure(&mut self, settings: ProviderConfig) {
-        match settings {
-            ProviderConfig::OpenAI(config) => self.openai = Some(config),
-            ProviderConfig::OpenRouter(config) => self.openrouter = Some(config),
-            ProviderConfig::Anthropic(config) => self.anthropic = Some(config),
-        }
+    pub fn into_providers(self) -> impl Iterator<Item = ProviderConfig> {
+        [
+            self.openai.map(ProviderConfig::OpenAI),
+            self.openrouter.map(ProviderConfig::OpenRouter),
+            self.anthropic.map(ProviderConfig::Anthropic),
+        ]
+        .into_iter()
+        .flatten()
     }
 }
 
@@ -62,22 +55,18 @@ impl ProviderConfig {
             Self::Anthropic(_) => ProviderId::Anthropic,
         }
     }
-
-    pub fn build(&self) -> Result<Box<dyn Provider>, ModelError> {
-        Ok(match self {
-            Self::OpenAI(config) => Box::new(OpenAI::new(&config.api_key)?),
-            Self::OpenRouter(config) => Box::new(OpenRouter::new(&config.api_key)?),
-            Self::Anthropic(config) => Box::new(Anthropic::new(&config.api_key)?),
-        })
-    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderId {
     OpenAI,
     OpenRouter,
     Anthropic,
+}
+
+impl ProviderId {
+    pub const ALL: [Self; 3] = [Self::OpenAI, Self::OpenRouter, Self::Anthropic];
 }
 
 impl fmt::Display for ProviderId {

@@ -1,6 +1,6 @@
 use crate::{
-    comms::{Command, Event},
-    config::provider::{ProviderConfig, ProviderId, ProvidersConfig},
+    comms::{AgentCommand, AgentEvent},
+    provider_manager::ModelSelection,
 };
 use ai_sdk::{
     GenerateRequest, Message, Tool, ToolCall, generate_text,
@@ -12,27 +12,19 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tool::DynTool;
 
 pub struct Agent {
-    provider_config: ProvidersConfig,
     selection: Option<ModelSelection>,
     context: Vec<Message>,
     tools: HashMap<String, Box<dyn DynTool>>,
-    events_sender: Sender<Event>,
-    commands_receiver: Receiver<Command>,
-}
-
-struct ModelSelection {
-    provider: ProviderId,
-    model: String,
-    client: Box<dyn Provider>,
+    events_sender: Sender<AgentEvent>,
+    commands_receiver: Receiver<AgentCommand>,
 }
 
 impl Agent {
     pub fn new(
         system_message: String,
         tools: Vec<Box<dyn DynTool>>,
-        events_sender: Sender<Event>,
-        commands_receiver: Receiver<Command>,
-        provider_config: ProvidersConfig,
+        events_sender: Sender<AgentEvent>,
+        commands_receiver: Receiver<AgentCommand>,
     ) -> Result<Self, ModelError> {
         let mut registered = HashMap::new();
         for tool in tools {
@@ -43,7 +35,6 @@ impl Agent {
         }
 
         Ok(Self {
-            provider_config,
             selection: None,
             context: vec![Message::system(system_message)],
             tools: registered,
@@ -54,11 +45,11 @@ impl Agent {
 
     async fn execute_tool(
         tools: &HashMap<String, Box<dyn DynTool>>,
-        events_sender: &Sender<Event>,
+        events_sender: &Sender<AgentEvent>,
         call: &ToolCall,
     ) -> Result<Value, ModelError> {
         events_sender
-            .send(Event::ToolCall {
+            .send(AgentEvent::ToolCall {
                 name: call.name.clone(),
                 arguments: call.arguments.clone(),
             })
@@ -74,34 +65,6 @@ impl Agent {
             },
             None => serde_json::json!({"error": format!("Unknown tool: {}", call.name)}),
         })
-    }
-
-    fn configure_provider(&mut self, settings: ProviderConfig) -> Result<(), ModelError> {
-        let client = settings.build()?;
-        if let Some(selection) = self.selection.as_mut()
-            && selection.provider == settings.id()
-        {
-            selection.client = client;
-        }
-        self.provider_config.configure(settings);
-        Ok(())
-    }
-
-    fn set_model(&mut self, provider: ProviderId, model: String) -> Result<(), ModelError> {
-        if model.trim().is_empty() {
-            return Err("Model must not be empty".into());
-        }
-        let settings = self
-            .provider_config
-            .settings(provider)
-            .ok_or_else(|| format!("{provider} is not configured"))?;
-        let client = settings.build()?;
-        self.selection = Some(ModelSelection {
-            provider,
-            model,
-            client,
-        });
-        Ok(())
     }
 
     pub async fn run(&mut self) -> Result<(), ModelError> {
@@ -130,25 +93,18 @@ impl Agent {
             };
 
             match command {
-                Command::ConfigureProvider(settings) => {
-                    let id = settings.id();
-                    let event = match self.configure_provider(settings) {
-                        Ok(()) => Event::ProviderConfigured(id),
-                        Err(error) => Event::SettingsFailed(error.to_string()),
+                AgentCommand::SetModel(selection) => {
+                    let event = AgentEvent::ModelSelected {
+                        provider: selection.provider(),
+                        model: selection.model().to_owned(),
                     };
+                    self.selection = Some(selection);
                     self.events_sender.send(event).await?;
                 }
-                Command::SetModel { provider, model } => {
-                    let event = match self.set_model(provider, model.clone()) {
-                        Ok(()) => Event::ModelSelected { provider, model },
-                        Err(error) => Event::SettingsFailed(error.to_string()),
-                    };
-                    self.events_sender.send(event).await?;
-                }
-                Command::SubmitPrompt(prompt) => {
+                AgentCommand::SubmitPrompt(prompt) => {
                     let Some(selection) = self.selection.as_ref() else {
                         self.events_sender
-                            .send(Event::Failed(
+                            .send(AgentEvent::Failed(
                                 "No model selected; configure a provider and select a model first"
                                     .into(),
                             ))
@@ -157,15 +113,15 @@ impl Agent {
                     };
                     let context_len = self.context.len();
                     self.context.push(Message::user(prompt));
-                    self.events_sender.send(Event::Started).await?;
+                    self.events_sender.send(AgentEvent::Started).await?;
 
                     let outcome = {
                         let turn = Self::run_turn(
                             &mut self.context,
                             &self.tools,
                             &self.events_sender,
-                            selection.client.as_ref(),
-                            selection.model.clone(),
+                            selection.client(),
+                            selection.model().to_owned(),
                             &definitions,
                         );
                         tokio::pin!(turn);
@@ -174,8 +130,8 @@ impl Agent {
                             tokio::select! {
                                 biased;
                                 command = self.commands_receiver.recv() => match command {
-                                    Some(Command::Cancel) => break None,
-                                    Some(Command::Shutdown) | None => return Ok(()),
+                                    Some(AgentCommand::Cancel) => break None,
+                                    Some(AgentCommand::Shutdown) | None => return Ok(()),
                                     Some(command) => pending.push_back(command),
                                 },
                                 result = &mut turn => break Some(result),
@@ -184,24 +140,24 @@ impl Agent {
                     };
 
                     match outcome {
-                        Some(Ok(())) => self.events_sender.send(Event::Completed).await?,
+                        Some(Ok(())) => self.events_sender.send(AgentEvent::Completed).await?,
                         Some(Err(error)) => {
                             self.context.truncate(context_len);
                             self.events_sender
-                                .send(Event::Failed(error.to_string()))
+                                .send(AgentEvent::Failed(error.to_string()))
                                 .await?;
                         }
                         None => {
                             // Discard partial tool-call history so the next request is valid.
                             self.context.truncate(context_len);
-                            self.events_sender.send(Event::Completed).await?;
+                            self.events_sender.send(AgentEvent::Completed).await?;
                         }
                     }
                 }
-                Command::Shutdown => {
+                AgentCommand::Shutdown => {
                     return Ok(());
                 }
-                Command::Cancel => {}
+                AgentCommand::Cancel => {}
             };
         }
     }
@@ -209,7 +165,7 @@ impl Agent {
     async fn run_turn(
         context: &mut Vec<Message>,
         tools: &HashMap<String, Box<dyn DynTool>>,
-        events_sender: &Sender<Event>,
+        events_sender: &Sender<AgentEvent>,
         provider: &dyn Provider,
         model: String,
         definitions: &[Tool],
@@ -223,7 +179,7 @@ impl Agent {
             context.push(response.into_message());
 
             if !text.is_empty() {
-                events_sender.send(Event::TextDelta(text)).await?;
+                events_sender.send(AgentEvent::TextDelta(text)).await?;
             }
             if calls.is_empty() {
                 return Ok(());
@@ -234,7 +190,7 @@ impl Agent {
 
                 let (event, message) = match result {
                     Ok(v) => (
-                        Event::ToolResult {
+                        AgentEvent::ToolResult {
                             name: call.name,
                             output: serde_json::to_string_pretty(&v)?,
                             success: true,
@@ -243,7 +199,7 @@ impl Agent {
                     ),
 
                     Err(e) => (
-                        Event::ToolResult {
+                        AgentEvent::ToolResult {
                             name: call.name,
                             output: e.to_string(),
                             success: false,

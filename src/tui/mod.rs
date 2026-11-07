@@ -1,11 +1,16 @@
 use std::io;
 
-use crate::comms::{Command, Event};
+use crate::{
+    comms::{AgentCommand, AgentEvent},
+    config::provider::{ProviderConfig, ProviderId, ProvidersConfig},
+    provider_manager::ProviderManager,
+};
+use ai_sdk::providers::ModelError;
 use components::{FooterComponent, MessageComponent, MessagesComponent, PromptComponent, Render};
 use crossterm::event::{Event as TerminalEvent, EventStream, KeyCode, KeyEventKind, KeyModifiers};
 use futures_util::StreamExt;
 use ratatui::{
-    DefaultTerminal, Frame,
+    Frame,
     layout::{Constraint, Direction, Layout},
 };
 use ratatui_textarea::Input;
@@ -14,18 +19,27 @@ use tokio::sync::mpsc::{Receiver, Sender};
 mod components;
 
 pub struct Tui {
-    commands_tx: Sender<Command>,
-    events_rx: Receiver<Event>,
+    provider_manager: ProviderManager,
+    selection: Option<(ProviderId, String)>,
+    commands_tx: Sender<AgentCommand>,
+    events_rx: Receiver<AgentEvent>,
     messages: MessagesComponent,
     prompt: PromptComponent,
     footer: FooterComponent,
     busy: bool,
     should_quit: bool,
+    terminal_active: bool,
 }
 
 impl Tui {
-    pub fn new(commands: Sender<Command>, events: Receiver<Event>) -> Self {
-        Self {
+    pub fn new(
+        commands: Sender<AgentCommand>,
+        events: Receiver<AgentEvent>,
+        config: ProvidersConfig,
+    ) -> Result<Self, ModelError> {
+        Ok(Self {
+            provider_manager: ProviderManager::from_config(config)?,
+            selection: None,
             commands_tx: commands,
             events_rx: events,
             messages: MessagesComponent::default(),
@@ -33,7 +47,27 @@ impl Tui {
             footer: FooterComponent::new(),
             busy: false,
             should_quit: false,
-        }
+            terminal_active: false,
+        })
+    }
+
+    pub fn configure_provider(&mut self, config: ProviderConfig) -> Result<ProviderId, ModelError> {
+        self.provider_manager.configure(config)
+    }
+
+    pub fn configured_providers(&self) -> Vec<ProviderId> {
+        self.provider_manager.configured()
+    }
+
+    pub fn selected_model(&self) -> Option<&(ProviderId, String)> {
+        self.selection.as_ref()
+    }
+
+    pub fn set_model(&self, provider: ProviderId, model: String) -> Result<(), ModelError> {
+        let selection = self.provider_manager.select(provider, model)?;
+        self.commands_tx
+            .try_send(AgentCommand::SetModel(selection))?;
+        Ok(())
     }
 
     pub fn handle_terminal_event(&mut self, event: TerminalEvent) {
@@ -48,7 +82,7 @@ impl Tui {
         match (key.code, key.modifiers) {
             (KeyCode::Char('c'), KeyModifiers::CONTROL) => self.should_quit = true,
             (KeyCode::Esc, _) if self.busy => {
-                if let Err(error) = self.commands_tx.try_send(Command::Cancel) {
+                if let Err(error) = self.commands_tx.try_send(AgentCommand::Cancel) {
                     self.footer.set_status(error.to_string());
                 }
             }
@@ -64,7 +98,7 @@ impl Tui {
                 }
                 match self
                     .commands_tx
-                    .try_send(Command::SubmitPrompt(content.clone()))
+                    .try_send(AgentCommand::SubmitPrompt(content.clone()))
                 {
                     Ok(()) => {
                         self.messages.push(MessageComponent::User { content });
@@ -82,20 +116,22 @@ impl Tui {
         }
     }
 
-    pub fn handle_agent_event(&mut self, event: Event) {
+    pub fn handle_agent_event(&mut self, event: AgentEvent) {
         match event {
-            Event::ProviderConfigured(_)
-            | Event::ModelSelected { .. }
-            | Event::SettingsFailed(_) => {}
-            Event::Started => {
+            AgentEvent::ModelSelected { provider, model } => {
+                self.footer
+                    .set_status(format!("Selected {provider}: {model}"));
+                self.selection = Some((provider, model));
+            }
+            AgentEvent::Started => {
                 self.busy = true;
                 self.footer.set_busy_status();
             }
-            Event::Completed => {
+            AgentEvent::Completed => {
                 self.busy = false;
                 self.footer.set_default_status();
             }
-            Event::Failed(error) => {
+            AgentEvent::Failed(error) => {
                 self.busy = false;
                 self.footer.set_status(error.clone());
                 self.messages.push(MessageComponent::ToolResult {
@@ -104,13 +140,13 @@ impl Tui {
                     success: false,
                 });
             }
-            Event::TextDelta(content) => {
+            AgentEvent::TextDelta(content) => {
                 self.messages.push(MessageComponent::Assistant { content })
             }
-            Event::ToolCall { name, arguments } => self
+            AgentEvent::ToolCall { name, arguments } => self
                 .messages
                 .push(MessageComponent::ToolCall { name, arguments }),
-            Event::ToolResult {
+            AgentEvent::ToolResult {
                 name,
                 output,
                 success,
@@ -124,6 +160,7 @@ impl Tui {
 
     pub async fn run(&mut self) -> io::Result<()> {
         let mut terminal = ratatui::init();
+        self.terminal_active = true;
         let mut terminal_events = EventStream::new();
 
         while !self.should_quit {
@@ -150,7 +187,9 @@ impl Tui {
 
 impl Drop for Tui {
     fn drop(&mut self) {
-        ratatui::restore();
+        if self.terminal_active {
+            ratatui::restore();
+        }
     }
 }
 

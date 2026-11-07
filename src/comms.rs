@@ -1,20 +1,17 @@
-use crate::config::provider::{ProviderConfig, ProviderId};
+use crate::{config::provider::ProviderId, provider_manager::ModelSelection};
 
-pub enum Command {
-    ConfigureProvider(ProviderConfig),
-    SetModel { provider: ProviderId, model: String },
+pub enum AgentCommand {
+    SetModel(ModelSelection),
     SubmitPrompt(String),
     Cancel,
     Shutdown,
 }
 
-pub enum Event {
-    ProviderConfigured(ProviderId),
+pub enum AgentEvent {
     ModelSelected {
         provider: ProviderId,
         model: String,
     },
-    SettingsFailed(String),
     Started,
     TextDelta(String),
     Completed,
