@@ -118,10 +118,12 @@ impl ProviderPopup {
                     self.message.clear();
                     ProviderPopupAction::None
                 }
-                KeyCode::Enter if !self.api_key().trim().is_empty() => ProviderPopupAction::Configure {
-                    provider: self.selected_provider(),
-                    api_key: self.api_key(),
-                },
+                KeyCode::Enter if !self.api_key().trim().is_empty() => {
+                    ProviderPopupAction::Configure {
+                        provider: self.selected_provider(),
+                        api_key: self.api_key(),
+                    }
+                }
                 KeyCode::Enter => ProviderPopupAction::None,
                 _ => {
                     self.api_key.input(Input::from(key));

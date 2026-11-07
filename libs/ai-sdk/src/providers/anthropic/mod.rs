@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use reqwest::header::HeaderValue;
 
-use super::{Provider, ModelError};
+use super::{ModelError, Provider};
 use crate::{GenerateRequest, GenerateResponse, async_trait};
 
 mod options;
@@ -59,15 +59,16 @@ impl Anthropic {
         })?;
         api_key.set_sensitive(true);
 
-        Ok(Self {
-            client,
-            api_key,
-        })
+        Ok(Self { client, api_key })
     }
 }
 
 #[async_trait]
 impl Provider for Anthropic {
+    fn id(&self) -> &'static str {
+        "anthropic"
+    }
+
     async fn generate(&self, request: GenerateRequest) -> Result<GenerateResponse, ModelError> {
         let request = AnthropicMessagesRequest::try_from(request)?;
         let response = self

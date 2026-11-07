@@ -2,6 +2,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
+use ai_sdk::models::{Catalog, CatalogModel};
 use ai_sdk::providers::{Anthropic, ModelError, OpenAI, OpenRouter, Provider};
 
 use crate::config::provider::{ProviderConfig, ProviderId, ProvidersConfig};
@@ -36,6 +37,25 @@ impl ProviderManager {
         ProviderId::ALL
             .into_iter()
             .filter(|id| self.clients.contains_key(id))
+            .collect()
+    }
+
+    pub fn models(&self, catalog: &Catalog) -> Vec<(ProviderId, CatalogModel)> {
+        self.configured()
+            .into_iter()
+            .flat_map(|id| {
+                catalog
+                    .models(self.clients[&id].id())
+                    .filter(|model| {
+                        model
+                            .modalities
+                            .output
+                            .iter()
+                            .any(|output| output == "text")
+                    })
+                    .cloned()
+                    .map(move |model| (id, model))
+            })
             .collect()
     }
 

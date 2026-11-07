@@ -1,7 +1,8 @@
 #![doc = include_str!("../README.md")]
 
-use crate::providers::{Provider, ModelError};
+use crate::providers::{ModelError, Provider};
 
+pub mod models;
 pub mod providers;
 mod types;
 

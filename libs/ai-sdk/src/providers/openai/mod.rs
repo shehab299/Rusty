@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use reqwest::header::HeaderValue;
 
-use super::{Provider, ModelError};
+use super::{ModelError, Provider};
 use crate::{GenerateRequest, GenerateResponse, async_trait};
 
 mod options;
@@ -67,14 +67,16 @@ impl OpenAI {
 
 #[async_trait]
 impl Provider for OpenAI {
+    fn id(&self) -> &'static str {
+        "openai"
+    }
+
     async fn generate(&self, request: GenerateRequest) -> Result<GenerateResponse, ModelError> {
         let response = self
             .client
             .post(&self.endpoint)
             .header(reqwest::header::AUTHORIZATION, self.authorization.clone())
-            .json(&OpenAIChatCompletionRequest::try_from(
-                request,
-            )?)
+            .json(&OpenAIChatCompletionRequest::try_from(request)?)
             .send()
             .await
             .map_err(OpenAIError::Transport)?;

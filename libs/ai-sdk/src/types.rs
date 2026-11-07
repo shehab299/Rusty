@@ -304,7 +304,10 @@ impl GenerateRequest {
         Self::from_messages(model, [Message::user(UserContent::Text(prompt.into()))])
     }
 
-    pub fn from_messages(model: impl Into<String>, messages: impl IntoIterator<Item = Message>) -> Self {
+    pub fn from_messages(
+        model: impl Into<String>,
+        messages: impl IntoIterator<Item = Message>,
+    ) -> Self {
         Self {
             model: model.into(),
             messages: messages.into_iter().collect(),

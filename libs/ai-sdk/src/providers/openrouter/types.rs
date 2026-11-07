@@ -46,7 +46,7 @@ impl TryFrom<GenerateRequest> for OpenRouterChatCompletionRequest {
         options.validate()?;
 
         Ok(Self {
-            model:request.model,
+            model: request.model,
             messages: request
                 .messages
                 .into_iter()

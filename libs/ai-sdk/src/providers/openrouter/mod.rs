@@ -5,7 +5,7 @@ use std::time::Duration;
 use reqwest::header::HeaderValue;
 use serde_json::Value;
 
-use super::{Provider, ModelError};
+use super::{ModelError, Provider};
 use crate::{GenerateRequest, GenerateResponse, async_trait};
 
 mod options;
@@ -35,9 +35,7 @@ pub struct OpenRouter {
 
 impl OpenRouter {
     /// Requests time out after 120 seconds; connections time out after 10 seconds.
-    pub fn new(
-        api_key: impl AsRef<str>,
-    ) -> Result<Self, OpenRouterError> {
+    pub fn new(api_key: impl AsRef<str>) -> Result<Self, OpenRouterError> {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(120))
@@ -74,9 +72,12 @@ impl OpenRouter {
 
 #[async_trait]
 impl Provider for OpenRouter {
+    fn id(&self) -> &'static str {
+        "openrouter"
+    }
+
     async fn generate(&self, request: GenerateRequest) -> Result<GenerateResponse, ModelError> {
-        let request_body =
-            OpenRouterChatCompletionRequest::try_from(request)?;
+        let request_body = OpenRouterChatCompletionRequest::try_from(request)?;
         let response = self
             .client
             .post(&self.endpoint)
