@@ -2,11 +2,17 @@ use std::io;
 
 use crate::{
     comms::{AgentCommand, AgentEvent},
-    config::provider::{ProviderConfig, ProviderId, ProvidersConfig},
+    config::provider::{
+        AnthropicConfig, OpenAIConfig, OpenRouterConfig, ProviderConfig, ProviderId,
+        ProvidersConfig,
+    },
     provider_manager::ProviderManager,
 };
 use ai_sdk::providers::ModelError;
-use components::{FooterComponent, MessageComponent, MessagesComponent, PromptComponent, Render};
+use components::{
+    FooterComponent, MessageComponent, MessagesComponent, ProviderPopupAction, PromptComponent,
+    ProviderPopup, Render,
+};
 use crossterm::event::{Event as TerminalEvent, EventStream, KeyCode, KeyEventKind, KeyModifiers};
 use futures_util::StreamExt;
 use ratatui::{
@@ -29,6 +35,7 @@ pub struct Tui {
     busy: bool,
     should_quit: bool,
     terminal_active: bool,
+    provider_popup: Option<ProviderPopup>,
 }
 
 impl Tui {
@@ -48,6 +55,7 @@ impl Tui {
             busy: false,
             should_quit: false,
             terminal_active: false,
+            provider_popup: None,
         })
     }
 
@@ -79,8 +87,40 @@ impl Tui {
             return;
         }
 
+        if key.code == KeyCode::Char('c') && key.modifiers == KeyModifiers::CONTROL {
+            self.should_quit = true;
+            return;
+        }
+
+        if let Some(mut popup) = self.provider_popup.take() {
+            match popup.handle_key(key) {
+                ProviderPopupAction::None => self.provider_popup = Some(popup),
+                ProviderPopupAction::Close => {}
+                ProviderPopupAction::Configure { provider, api_key } => {
+                    let config = match provider {
+                        ProviderId::OpenAI => ProviderConfig::OpenAI(OpenAIConfig { api_key }),
+                        ProviderId::OpenRouter => {
+                            ProviderConfig::OpenRouter(OpenRouterConfig { api_key })
+                        }
+                        ProviderId::Anthropic => {
+                            ProviderConfig::Anthropic(AnthropicConfig { api_key })
+                        }
+                    };
+                    match self.configure_provider(config) {
+                        Ok(id) => {
+                            self.footer.set_status(format!("Configured {id}"));
+                        }
+                        Err(error) => {
+                            popup.set_message(error.to_string());
+                            self.provider_popup = Some(popup);
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
         match (key.code, key.modifiers) {
-            (KeyCode::Char('c'), KeyModifiers::CONTROL) => self.should_quit = true,
             (KeyCode::Esc, _) if self.busy => {
                 if let Err(error) = self.commands_tx.try_send(AgentCommand::Cancel) {
                     self.footer.set_status(error.to_string());
@@ -92,10 +132,18 @@ impl Tui {
                 self.prompt.insert_newline();
             }
             (KeyCode::Enter, KeyModifiers::NONE) => {
-                let content = self.prompt.content();
-                if content.trim().is_empty() || self.busy {
+                let content = self.prompt.content().trim();
+
+                if content == "/connect" {
+                    self.provider_popup = Some(ProviderPopup::new(self.configured_providers()));
+                    self.prompt.clear();
                     return;
                 }
+
+                if content.is_empty() || self.busy {
+                    return;
+                }
+
                 match self
                     .commands_tx
                     .try_send(AgentCommand::SubmitPrompt(content.clone()))
@@ -208,5 +256,8 @@ impl Render for Tui {
         self.footer.render(f, areas[2]);
         self.prompt.render(f, areas[1]);
         self.messages.render(f, areas[0]);
+        if let Some(popup) = &self.provider_popup {
+            popup.render(f, f.area());
+        }
     }
 }

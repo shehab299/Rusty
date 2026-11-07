@@ -72,9 +72,9 @@ impl ProviderId {
 impl fmt::Display for ProviderId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::OpenAI => "openai",
-            Self::OpenRouter => "openrouter",
-            Self::Anthropic => "anthropic",
+            Self::OpenAI => "OpenAI",
+            Self::OpenRouter => "OpenRouter",
+            Self::Anthropic => "Anthropic",
         })
     }
 }

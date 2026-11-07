@@ -84,4 +84,3 @@ impl ModelSelection {
         self.client.as_ref()
     }
 }
-
