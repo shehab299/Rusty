@@ -1,7 +1,10 @@
-use crate::comms::{Command, Event};
+use crate::{
+    comms::{Command, Event},
+    config::provider::{ProviderConfig, ProviderId, ProvidersConfig},
+};
 use ai_sdk::{
     GenerateRequest, Message, Tool, ToolCall, generate_text,
-    providers::{Model, ModelError},
+    providers::{ModelError, Provider},
 };
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
@@ -9,10 +12,18 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tool::DynTool;
 
 pub struct Agent {
+    provider_config: ProvidersConfig,
+    selection: Option<ModelSelection>,
     context: Vec<Message>,
     tools: HashMap<String, Box<dyn DynTool>>,
     events_sender: Sender<Event>,
     commands_receiver: Receiver<Command>,
+}
+
+struct ModelSelection {
+    provider: ProviderId,
+    model: String,
+    client: Box<dyn Provider>,
 }
 
 impl Agent {
@@ -21,6 +32,7 @@ impl Agent {
         tools: Vec<Box<dyn DynTool>>,
         events_sender: Sender<Event>,
         commands_receiver: Receiver<Command>,
+        provider_config: ProvidersConfig,
     ) -> Result<Self, ModelError> {
         let mut registered = HashMap::new();
         for tool in tools {
@@ -31,6 +43,8 @@ impl Agent {
         }
 
         Ok(Self {
+            provider_config,
+            selection: None,
             context: vec![Message::system(system_message)],
             tools: registered,
             events_sender,
@@ -62,7 +76,35 @@ impl Agent {
         })
     }
 
-    pub async fn run(&mut self, model: &dyn Model) -> Result<(), ModelError> {
+    fn configure_provider(&mut self, settings: ProviderConfig) -> Result<(), ModelError> {
+        let client = settings.build()?;
+        if let Some(selection) = self.selection.as_mut()
+            && selection.provider == settings.id()
+        {
+            selection.client = client;
+        }
+        self.provider_config.configure(settings);
+        Ok(())
+    }
+
+    fn set_model(&mut self, provider: ProviderId, model: String) -> Result<(), ModelError> {
+        if model.trim().is_empty() {
+            return Err("Model must not be empty".into());
+        }
+        let settings = self
+            .provider_config
+            .settings(provider)
+            .ok_or_else(|| format!("{provider} is not configured"))?;
+        let client = settings.build()?;
+        self.selection = Some(ModelSelection {
+            provider,
+            model,
+            client,
+        });
+        Ok(())
+    }
+
+    pub async fn run(&mut self) -> Result<(), ModelError> {
         let definitions: Vec<Tool> = self
             .tools
             .values()
@@ -77,9 +119,10 @@ impl Agent {
             .collect();
 
         let mut pending = VecDeque::new();
+
         loop {
             let command = match pending.pop_front() {
-                Some(prompt) => Command::SubmitPrompt(prompt),
+                Some(command) => command,
                 None => match self.commands_receiver.recv().await {
                     Some(command) => command,
                     None => return Ok(()),
@@ -87,7 +130,31 @@ impl Agent {
             };
 
             match command {
+                Command::ConfigureProvider(settings) => {
+                    let id = settings.id();
+                    let event = match self.configure_provider(settings) {
+                        Ok(()) => Event::ProviderConfigured(id),
+                        Err(error) => Event::SettingsFailed(error.to_string()),
+                    };
+                    self.events_sender.send(event).await?;
+                }
+                Command::SetModel { provider, model } => {
+                    let event = match self.set_model(provider, model.clone()) {
+                        Ok(()) => Event::ModelSelected { provider, model },
+                        Err(error) => Event::SettingsFailed(error.to_string()),
+                    };
+                    self.events_sender.send(event).await?;
+                }
                 Command::SubmitPrompt(prompt) => {
+                    let Some(selection) = self.selection.as_ref() else {
+                        self.events_sender
+                            .send(Event::Failed(
+                                "No model selected; configure a provider and select a model first"
+                                    .into(),
+                            ))
+                            .await?;
+                        continue;
+                    };
                     let context_len = self.context.len();
                     self.context.push(Message::user(prompt));
                     self.events_sender.send(Event::Started).await?;
@@ -97,7 +164,8 @@ impl Agent {
                             &mut self.context,
                             &self.tools,
                             &self.events_sender,
-                            model,
+                            selection.client.as_ref(),
+                            selection.model.clone(),
                             &definitions,
                         );
                         tokio::pin!(turn);
@@ -106,9 +174,9 @@ impl Agent {
                             tokio::select! {
                                 biased;
                                 command = self.commands_receiver.recv() => match command {
-                                    Some(Command::SubmitPrompt(prompt)) => pending.push_back(prompt),
                                     Some(Command::Cancel) => break None,
                                     Some(Command::Shutdown) | None => return Ok(()),
+                                    Some(command) => pending.push_back(command),
                                 },
                                 result = &mut turn => break Some(result),
                             }
@@ -142,13 +210,14 @@ impl Agent {
         context: &mut Vec<Message>,
         tools: &HashMap<String, Box<dyn DynTool>>,
         events_sender: &Sender<Event>,
-        model: &dyn Model,
+        provider: &dyn Provider,
+        model: String,
         definitions: &[Tool],
     ) -> Result<(), ModelError> {
         loop {
-            let request =
-                GenerateRequest::from_messages(context.clone()).with_tools(definitions.to_vec());
-            let response = generate_text(model, request).await?;
+            let request = GenerateRequest::from_messages(model.clone(), context.clone())
+                .with_tools(definitions.to_vec());
+            let response = generate_text(provider, request).await?;
             let calls = response.tool_calls.clone();
             let text = response.text.clone();
             context.push(response.into_message());

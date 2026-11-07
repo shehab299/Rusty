@@ -84,6 +84,9 @@ impl Tui {
 
     pub fn handle_agent_event(&mut self, event: Event) {
         match event {
+            Event::ProviderConfigured(_)
+            | Event::ModelSelected { .. }
+            | Event::SettingsFailed(_) => {}
             Event::Started => {
                 self.busy = true;
                 self.footer.set_busy_status();

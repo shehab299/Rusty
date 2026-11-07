@@ -5,11 +5,14 @@ use std::path::Path;
 use config::{Config, ConfigError, Environment, File};
 use serde::Deserialize;
 
+pub mod provider;
+
+use provider::ProvidersConfig;
+
 #[derive(Clone, Default, Deserialize)]
 pub struct AppConfig {
-    pub openai: Option<OpenAIConfig>,
-    pub openrouter: Option<OpenRouterConfig>,
-    pub anthropic: Option<AnthropicConfig>,
+    #[serde(default)]
+    pub provider: ProvidersConfig,
 }
 
 impl AppConfig {
@@ -30,22 +33,4 @@ impl AppConfig {
             .build()?
             .try_deserialize()
     }
-}
-
-#[derive(Clone, Deserialize)]
-pub struct OpenAIConfig {
-    pub api_key: String,
-    pub model: String,
-}
-
-#[derive(Clone, Deserialize)]
-pub struct OpenRouterConfig {
-    pub api_key: String,
-    pub model: String,
-}
-
-#[derive(Clone, Deserialize)]
-pub struct AnthropicConfig {
-    pub api_key: String,
-    pub model: String,
 }
