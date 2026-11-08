@@ -18,7 +18,7 @@ use crossterm::event::{Event as TerminalEvent, EventStream, KeyCode, KeyEventKin
 use futures_util::StreamExt;
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
 };
 use ratatui_textarea::Input;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -84,6 +84,65 @@ impl Tui {
         Ok(())
     }
 
+    fn handle_model_popup_action(&mut self, action: ModelPopupAction) {
+        match action {
+            ModelPopupAction::None => {}
+            ModelPopupAction::Connect => {
+                self.provider_popup = Some(ProviderPopup::new(self.provider_manager.configured()));
+            }
+            ModelPopupAction::Select { provider, model } => match self.set_model(provider, model) {
+                Ok(()) => self.model_popup.visible = false,
+                Err(error) => self.model_popup.set_error(error.to_string()),
+            },
+        }
+    }
+
+    fn handle_provider_popup_action(&mut self, action: ProviderPopupAction) {
+        match action {
+            ProviderPopupAction::None => self.provider_popup = Some(popup),
+            ProviderPopupAction::Close => {}
+            ProviderPopupAction::Configure { provider, api_key } => {
+                let config = match provider {
+                    ProviderId::OpenAI => ProviderConfig::OpenAI(OpenAIConfig { api_key }),
+                    ProviderId::OpenRouter => {
+                        ProviderConfig::OpenRouter(OpenRouterConfig { api_key })
+                    }
+                    ProviderId::Anthropic => ProviderConfig::Anthropic(AnthropicConfig { api_key }),
+                };
+                match self.configure_provider(config) {
+                    Ok(id) => {
+                        self.footer.set_status(format!("Configured {id}"));
+                    }
+                    Err(error) => {
+                        popup.set_message(error.to_string());
+                        self.provider_popup = Some(popup);
+                    }
+                }
+            }
+        }
+    }
+
+    fn handle_slash_commands(&mut self, command: impl Into<String>) -> bool {
+        let command = command.into();
+        if !command.starts_with('/') {
+            return false;
+        }
+
+        match command.as_str() {
+            "/connect" => {
+                self.provider_popup = Some(ProviderPopup::new(self.provider_manager.configured()));
+                self.prompt.clear();
+                true
+            }
+            "/models" => {
+                self.model_popup.open();
+                self.prompt.clear();
+                true
+            }
+            _ => false,
+        }
+    }
+
     // Event Handling
 
     fn handle_terminal_event(&mut self, event: TerminalEvent) {
@@ -101,47 +160,14 @@ impl Tui {
         }
 
         if self.model_popup.visible {
-            match self.model_popup.handle_key(key) {
-                ModelPopupAction::None => {}
-                ModelPopupAction::Connect => {
-                    self.provider_popup =
-                        Some(ProviderPopup::new(self.provider_manager.configured()));
-                }
-                ModelPopupAction::Select { provider, model } => {
-                    match self.set_model(provider, model) {
-                        Ok(()) => self.model_popup.visible = false,
-                        Err(error) => self.model_popup.set_error(error.to_string()),
-                    }
-                }
-            }
+            let popup_action = self.model_popup.handle_key(key);
+            self.handle_model_popup_action(popup_action);
             return;
         }
 
         if let Some(mut popup) = self.provider_popup.take() {
-            match popup.handle_key(key) {
-                ProviderPopupAction::None => self.provider_popup = Some(popup),
-                ProviderPopupAction::Close => {}
-                ProviderPopupAction::Configure { provider, api_key } => {
-                    let config = match provider {
-                        ProviderId::OpenAI => ProviderConfig::OpenAI(OpenAIConfig { api_key }),
-                        ProviderId::OpenRouter => {
-                            ProviderConfig::OpenRouter(OpenRouterConfig { api_key })
-                        }
-                        ProviderId::Anthropic => {
-                            ProviderConfig::Anthropic(AnthropicConfig { api_key })
-                        }
-                    };
-                    match self.configure_provider(config) {
-                        Ok(id) => {
-                            self.footer.set_status(format!("Configured {id}"));
-                        }
-                        Err(error) => {
-                            popup.set_message(error.to_string());
-                            self.provider_popup = Some(popup);
-                        }
-                    }
-                }
-            }
+            let popup_action = popup.handle_key(key);
+            self.handle_provider_popup_action(popup_action);
             return;
         }
 
@@ -157,22 +183,17 @@ impl Tui {
                 self.prompt.insert_newline();
             }
             (KeyCode::Enter, KeyModifiers::NONE) => {
-                let content = self.prompt.content();
+                let content = self.prompt.content().trim();
 
-                if content.trim() == "/connect" {
-                    self.provider_popup =
-                        Some(ProviderPopup::new(self.provider_manager.configured()));
-                    self.prompt.clear();
+                if content.is_empty() {
                     return;
                 }
 
-                if content.trim() == "/models" {
-                    self.model_popup.open();
-                    self.prompt.clear();
+                if self.handle_slash_commands(content) {
                     return;
                 }
 
-                if content.trim().is_empty() || self.busy {
+                if self.busy {
                     return;
                 }
 
@@ -274,7 +295,7 @@ impl Drop for Tui {
 }
 
 impl Render for Tui {
-    fn render(&self, f: &mut Frame, area: ratatui::prelude::Rect) {
+    fn render(&self, f: &mut Frame, area: Rect) {
         let layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
