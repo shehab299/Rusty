@@ -97,7 +97,11 @@ impl Tui {
         }
     }
 
-    fn handle_provider_popup_action(&mut self, action: ProviderPopupAction) {
+    fn handle_provider_popup_action(
+        &mut self,
+        action: ProviderPopupAction,
+        mut popup: ProviderPopup,
+    ) {
         match action {
             ProviderPopupAction::None => self.provider_popup = Some(popup),
             ProviderPopupAction::Close => {}
@@ -167,7 +171,7 @@ impl Tui {
 
         if let Some(mut popup) = self.provider_popup.take() {
             let popup_action = popup.handle_key(key);
-            self.handle_provider_popup_action(popup_action);
+            self.handle_provider_popup_action(popup_action, popup);
             return;
         }
 
@@ -183,26 +187,24 @@ impl Tui {
                 self.prompt.insert_newline();
             }
             (KeyCode::Enter, KeyModifiers::NONE) => {
-                let content = self.prompt.content().trim();
+                let content = self.prompt.content();
 
-                if content.is_empty() {
+                if self.handle_slash_commands(content.trim()) {
                     return;
                 }
 
-                if self.handle_slash_commands(content) {
-                    return;
-                }
-
-                if self.busy {
+                if self.busy || content.trim().is_empty() {
                     return;
                 }
 
                 match self
                     .commands_tx
-                    .try_send(AgentCommand::SubmitPrompt(content.clone()))
+                    .try_send(AgentCommand::SubmitPrompt(content.to_string()))
                 {
                     Ok(()) => {
-                        self.messages.push(MessageComponent::User { content });
+                        self.messages.push(MessageComponent::User {
+                            content: content.to_string(),
+                        });
                         self.prompt.clear();
                         self.busy = true;
                         self.messages.scroll_to_bottom();
@@ -295,7 +297,7 @@ impl Drop for Tui {
 }
 
 impl Render for Tui {
-    fn render(&self, f: &mut Frame, area: Rect) {
+    fn render(&self, f: &mut Frame, _area: Rect) {
         let layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
