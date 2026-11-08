@@ -1,5 +1,6 @@
 use std::io;
 
+use crate::model_catalog::Catalog;
 use crate::{
     comms::{AgentCommand, AgentEvent},
     config::provider::{
@@ -10,8 +11,8 @@ use crate::{
 };
 use ai_sdk::providers::ModelError;
 use components::{
-    FooterComponent, MessageComponent, MessagesComponent, ProviderPopupAction, PromptComponent,
-    ProviderPopup, Render,
+    FooterComponent, MessageComponent, MessagesComponent, ModelPopup, ModelPopupAction,
+    PromptComponent, ProviderPopup, ProviderPopupAction, Render,
 };
 use crossterm::event::{Event as TerminalEvent, EventStream, KeyCode, KeyEventKind, KeyModifiers};
 use futures_util::StreamExt;
@@ -25,17 +26,19 @@ use tokio::sync::mpsc::{Receiver, Sender};
 mod components;
 
 pub struct Tui {
-    provider_manager: ProviderManager,
-    selection: Option<(ProviderId, String)>,
     commands_tx: Sender<AgentCommand>,
     events_rx: Receiver<AgentEvent>,
+
     messages: MessagesComponent,
     prompt: PromptComponent,
     footer: FooterComponent,
+    provider_popup: Option<ProviderPopup>,
+    model_popup: ModelPopup,
+
     busy: bool,
     should_quit: bool,
     terminal_active: bool,
-    provider_popup: Option<ProviderPopup>,
+    provider_manager: ProviderManager,
 }
 
 impl Tui {
@@ -43,10 +46,15 @@ impl Tui {
         commands: Sender<AgentCommand>,
         events: Receiver<AgentEvent>,
         config: ProvidersConfig,
+        catalog: Catalog,
     ) -> Result<Self, ModelError> {
+        let provider_manager = ProviderManager::from_config(config)?;
+
+        let mut model_popup = ModelPopup::new(catalog);
+        model_popup.set_configured_providers(provider_manager.configured());
+
         Ok(Self {
-            provider_manager: ProviderManager::from_config(config)?,
-            selection: None,
+            provider_manager,
             commands_tx: commands,
             events_rx: events,
             messages: MessagesComponent::default(),
@@ -56,29 +64,29 @@ impl Tui {
             should_quit: false,
             terminal_active: false,
             provider_popup: None,
+            model_popup,
         })
     }
 
-    pub fn configure_provider(&mut self, config: ProviderConfig) -> Result<ProviderId, ModelError> {
-        self.provider_manager.configure(config)
+    // Helpers
+
+    fn configure_provider(&mut self, config: ProviderConfig) -> Result<ProviderId, ModelError> {
+        let id = self.provider_manager.configure(config)?;
+        self.model_popup
+            .set_configured_providers(self.provider_manager.configured());
+        Ok(id)
     }
 
-    pub fn configured_providers(&self) -> Vec<ProviderId> {
-        self.provider_manager.configured()
-    }
-
-    pub fn selected_model(&self) -> Option<&(ProviderId, String)> {
-        self.selection.as_ref()
-    }
-
-    pub fn set_model(&self, provider: ProviderId, model: String) -> Result<(), ModelError> {
+    fn set_model(&self, provider: ProviderId, model: String) -> Result<(), ModelError> {
         let selection = self.provider_manager.select(provider, model)?;
         self.commands_tx
             .try_send(AgentCommand::SetModel(selection))?;
         Ok(())
     }
 
-    pub fn handle_terminal_event(&mut self, event: TerminalEvent) {
+    // Event Handling
+
+    fn handle_terminal_event(&mut self, event: TerminalEvent) {
         let TerminalEvent::Key(key) = event else {
             return;
         };
@@ -89,6 +97,23 @@ impl Tui {
 
         if key.code == KeyCode::Char('c') && key.modifiers == KeyModifiers::CONTROL {
             self.should_quit = true;
+            return;
+        }
+
+        if self.model_popup.visible {
+            match self.model_popup.handle_key(key) {
+                ModelPopupAction::None => {}
+                ModelPopupAction::Connect => {
+                    self.provider_popup =
+                        Some(ProviderPopup::new(self.provider_manager.configured()));
+                }
+                ModelPopupAction::Select { provider, model } => {
+                    match self.set_model(provider, model) {
+                        Ok(()) => self.model_popup.visible = false,
+                        Err(error) => self.model_popup.set_error(error.to_string()),
+                    }
+                }
+            }
             return;
         }
 
@@ -132,15 +157,22 @@ impl Tui {
                 self.prompt.insert_newline();
             }
             (KeyCode::Enter, KeyModifiers::NONE) => {
-                let content = self.prompt.content().trim();
+                let content = self.prompt.content();
 
-                if content == "/connect" {
-                    self.provider_popup = Some(ProviderPopup::new(self.configured_providers()));
+                if content.trim() == "/connect" {
+                    self.provider_popup =
+                        Some(ProviderPopup::new(self.provider_manager.configured()));
                     self.prompt.clear();
                     return;
                 }
 
-                if content.is_empty() || self.busy {
+                if content.trim() == "/models" {
+                    self.model_popup.open();
+                    self.prompt.clear();
+                    return;
+                }
+
+                if content.trim().is_empty() || self.busy {
                     return;
                 }
 
@@ -164,12 +196,12 @@ impl Tui {
         }
     }
 
-    pub fn handle_agent_event(&mut self, event: AgentEvent) {
+    fn handle_agent_event(&mut self, event: AgentEvent) {
         match event {
             AgentEvent::ModelSelected { provider, model } => {
                 self.footer
                     .set_status(format!("Selected {provider}: {model}"));
-                self.selection = Some((provider, model));
+                self.model_popup.current = Some((provider, model));
             }
             AgentEvent::Started => {
                 self.busy = true;
@@ -259,5 +291,6 @@ impl Render for Tui {
         if let Some(popup) = &self.provider_popup {
             popup.render(f, f.area());
         }
+        self.model_popup.render(f, f.area());
     }
 }

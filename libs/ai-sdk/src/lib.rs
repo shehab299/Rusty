@@ -2,7 +2,6 @@
 
 use crate::providers::{ModelError, Provider};
 
-pub mod models;
 pub mod providers;
 mod types;
 

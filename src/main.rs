@@ -9,6 +9,7 @@ mod agent;
 mod comms;
 mod config;
 mod error;
+mod model_catalog;
 mod provider_manager;
 mod registry;
 mod tui;
@@ -16,6 +17,7 @@ mod tui;
 #[tokio::main]
 async fn main() -> Result<(), ModelError> {
     let config = AppConfig::load()?;
+    let catalog = model_catalog::load_catalog().await?;
 
     let (commands_tx, commands_rx) = mpsc::channel::<AgentCommand>(100);
     let (events_tx, events_rx) = mpsc::channel::<AgentEvent>(100);
@@ -30,7 +32,7 @@ async fn main() -> Result<(), ModelError> {
     let agent_task = tokio::spawn(async move { agent.run().await });
 
     let terminal_result = {
-        let mut tui = Tui::new(commands_tx.clone(), events_rx, config.provider)?;
+        let mut tui = Tui::new(commands_tx.clone(), events_rx, config.provider, catalog)?;
         tui.run().await
     };
     let _ = commands_tx.send(AgentCommand::Shutdown).await;

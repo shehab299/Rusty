@@ -5,6 +5,7 @@ use std::path::Path;
 use config::{Config, ConfigError, Environment, File};
 use serde::Deserialize;
 
+pub mod home;
 pub mod provider;
 
 use provider::ProvidersConfig;
