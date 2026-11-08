@@ -1,4 +1,4 @@
-use crate::{agent::Agent, config::AppConfig, registry::get_tools};
+use crate::{agent::Agent, config::AppConfig, error::AppError, registry::get_tools};
 
 use ai_sdk::providers::ModelError;
 use comms::{AgentCommand, AgentEvent};
@@ -16,7 +16,7 @@ mod tui;
 
 #[tokio::main]
 async fn main() -> Result<(), ModelError> {
-    let config = AppConfig::load()?;
+    let config = AppConfig::load().map_err(|e| AppError::Config(e))?;
     let catalog = model_catalog::load_catalog().await?;
 
     let (commands_tx, commands_rx) = mpsc::channel::<AgentCommand>(100);
@@ -27,7 +27,8 @@ async fn main() -> Result<(), ModelError> {
         get_tools(),
         events_tx,
         commands_rx,
-    )?;
+    )
+    .map_err(|e| AppError::Agent(e))?;
 
     let agent_task = tokio::spawn(async move { agent.run().await });
 
@@ -37,8 +38,8 @@ async fn main() -> Result<(), ModelError> {
     };
     let _ = commands_tx.send(AgentCommand::Shutdown).await;
 
-    let agent_result = agent_task.await?;
-    terminal_result?;
+    let agent_result = agent_task.await.map_err(|e| AppError::Task(e))?;
+    terminal_result.map_err(|e| AppError::Terminal(e))?;
 
     match agent_result {
         Err(error) if error.is::<mpsc::error::SendError<AgentEvent>>() => Ok(()),

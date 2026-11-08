@@ -67,4 +67,3 @@ async fn persist_catalog(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     }
     result
 }
-
