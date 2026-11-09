@@ -1,11 +1,9 @@
 use crate::{
     comms::{AgentCommand, AgentEvent},
+    error::AppError,
     provider_manager::ModelSelection,
 };
-use ai_sdk::{
-    GenerateRequest, Message, Tool, ToolCall, generate_text,
-    providers::{ModelError, Provider},
-};
+use ai_sdk::{GenerateRequest, Message, Tool, ToolCall, generate_text, providers::Provider};
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -25,12 +23,14 @@ impl Agent {
         tools: Vec<Box<dyn DynTool>>,
         events_sender: Sender<AgentEvent>,
         commands_receiver: Receiver<AgentCommand>,
-    ) -> Result<Self, ModelError> {
+    ) -> Result<Self, AppError> {
         let mut registered = HashMap::new();
         for tool in tools {
             let name = tool.definition().name;
             if registered.insert(name.clone(), tool).is_some() {
-                return Err(format!("duplicate tool name: {name}").into());
+                return Err(AppError::Agent(
+                    format!("duplicate tool name: {name}").into(),
+                ));
             }
         }
 
@@ -47,7 +47,7 @@ impl Agent {
         tools: &HashMap<String, Box<dyn DynTool>>,
         events_sender: &Sender<AgentEvent>,
         call: &ToolCall,
-    ) -> Result<Value, ModelError> {
+    ) -> Result<Value, AppError> {
         events_sender
             .send(AgentEvent::ToolCall {
                 name: call.name.clone(),
@@ -67,7 +67,7 @@ impl Agent {
         })
     }
 
-    pub async fn run(&mut self) -> Result<(), ModelError> {
+    pub async fn run(&mut self) -> Result<(), AppError> {
         let definitions: Vec<Tool> = self
             .tools
             .values()
@@ -169,7 +169,7 @@ impl Agent {
         provider: &dyn Provider,
         model: String,
         definitions: &[Tool],
-    ) -> Result<(), ModelError> {
+    ) -> Result<(), AppError> {
         loop {
             let request = GenerateRequest::from_messages(model.clone(), context.clone())
                 .with_tools(definitions.to_vec());

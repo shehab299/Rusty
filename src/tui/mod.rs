@@ -1,5 +1,6 @@
 use std::io;
 
+use crate::error::AppError;
 use crate::model_catalog::Catalog;
 use crate::{
     comms::{AgentCommand, AgentEvent},
@@ -9,7 +10,6 @@ use crate::{
     },
     provider_manager::ProviderManager,
 };
-use ai_sdk::providers::ModelError;
 use components::{
     FooterComponent, MessageComponent, MessagesComponent, ModelPopup, ModelPopupAction,
     PromptComponent, ProviderPopup, ProviderPopupAction, Render,
@@ -47,7 +47,7 @@ impl Tui {
         events: Receiver<AgentEvent>,
         config: ProvidersConfig,
         catalog: Catalog,
-    ) -> Result<Self, ModelError> {
+    ) -> Result<Self, AppError> {
         let provider_manager = ProviderManager::from_config(config)?;
 
         let mut model_popup = ModelPopup::new(catalog);
@@ -70,14 +70,14 @@ impl Tui {
 
     // Helpers
 
-    fn configure_provider(&mut self, config: ProviderConfig) -> Result<ProviderId, ModelError> {
+    fn configure_provider(&mut self, config: ProviderConfig) -> Result<ProviderId, AppError> {
         let id = self.provider_manager.configure(config)?;
         self.model_popup
             .set_configured_providers(self.provider_manager.configured());
         Ok(id)
     }
 
-    fn set_model(&self, provider: ProviderId, model: String) -> Result<(), ModelError> {
+    fn set_model(&self, provider: ProviderId, model: String) -> Result<(), AppError> {
         let selection = self.provider_manager.select(provider, model)?;
         self.commands_tx
             .try_send(AgentCommand::SetModel(selection))?;

@@ -2,12 +2,12 @@
 
 use std::{path::Path, time::Duration};
 
-use ai_sdk::providers::ModelError;
+use crate::error::AppError;
 
 mod types;
 pub use types::{Catalog, CatalogModel};
 
-pub async fn load_catalog() -> Result<Catalog, ModelError> {
+pub async fn load_catalog() -> Result<Catalog, AppError> {
     let agent_root = crate::config::home::get_agent_root()?;
     let path = agent_root.join("cache/models.json");
 
@@ -26,7 +26,7 @@ pub async fn load_catalog() -> Result<Catalog, ModelError> {
             .to_vec();
 
         let catalog = serde_json::from_slice::<Catalog>(&bytes)?;
-        Ok((catalog, bytes))
+        Ok::<_, AppError>((catalog, bytes))
     }
     .await;
 
@@ -47,7 +47,7 @@ pub async fn load_catalog() -> Result<Catalog, ModelError> {
     }
 }
 
-async fn read_persisted_catalog(path: &Path) -> Result<Catalog, ModelError> {
+async fn read_persisted_catalog(path: &Path) -> Result<Catalog, AppError> {
     let bytes = tokio::fs::read(path).await?;
     Ok(serde_json::from_slice(&bytes)?)
 }

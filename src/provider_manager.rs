@@ -2,9 +2,10 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use ai_sdk::providers::{Anthropic, ModelError, OpenAI, OpenRouter, Provider};
+use ai_sdk::providers::{Anthropic, OpenAI, OpenRouter, Provider};
 
 use crate::config::provider::{ProviderConfig, ProviderId, ProvidersConfig};
+use crate::error::AppError;
 
 #[derive(Default)]
 pub struct ProviderManager {
@@ -12,7 +13,7 @@ pub struct ProviderManager {
 }
 
 impl ProviderManager {
-    pub fn from_config(config: ProvidersConfig) -> Result<Self, ModelError> {
+    pub fn from_config(config: ProvidersConfig) -> Result<Self, AppError> {
         let mut manager = Self::default();
         for provider in config.into_providers() {
             manager.configure(provider)?;
@@ -21,12 +22,20 @@ impl ProviderManager {
     }
 
     /// Build before replacing the existing client. Raw settings aren't retained.
-    pub fn configure(&mut self, config: ProviderConfig) -> Result<ProviderId, ModelError> {
+    pub fn configure(&mut self, config: ProviderConfig) -> Result<ProviderId, AppError> {
         let id = config.id();
         let client: Arc<dyn Provider> = match config {
-            ProviderConfig::OpenAI(config) => Arc::new(OpenAI::new(config.api_key)?),
-            ProviderConfig::OpenRouter(config) => Arc::new(OpenRouter::new(config.api_key)?),
-            ProviderConfig::Anthropic(config) => Arc::new(Anthropic::new(config.api_key)?),
+            ProviderConfig::OpenAI(config) => Arc::new(
+                OpenAI::new(config.api_key).map_err(|error| AppError::Provider(Box::new(error)))?,
+            ),
+            ProviderConfig::OpenRouter(config) => Arc::new(
+                OpenRouter::new(config.api_key)
+                    .map_err(|error| AppError::Provider(Box::new(error)))?,
+            ),
+            ProviderConfig::Anthropic(config) => Arc::new(
+                Anthropic::new(config.api_key)
+                    .map_err(|error| AppError::Provider(Box::new(error)))?,
+            ),
         };
         self.clients.insert(id, client);
         Ok(id)
@@ -39,15 +48,11 @@ impl ProviderManager {
             .collect()
     }
 
-    pub fn select(
-        &self,
-        provider: ProviderId,
-        model: String,
-    ) -> Result<ModelSelection, ModelError> {
+    pub fn select(&self, provider: ProviderId, model: String) -> Result<ModelSelection, AppError> {
         let client = self
             .clients
             .get(&provider)
-            .ok_or_else(|| format!("{provider} is not configured"))?;
+            .ok_or_else(|| AppError::Provider(format!("{provider} is not configured").into()))?;
         ModelSelection::new(provider, model, Arc::clone(client))
     }
 }
@@ -63,9 +68,9 @@ impl ModelSelection {
         provider: ProviderId,
         model: String,
         client: Arc<dyn Provider>,
-    ) -> Result<Self, ModelError> {
+    ) -> Result<Self, AppError> {
         if model.trim().is_empty() {
-            return Err("Model must not be empty".into());
+            return Err(AppError::Provider("model name must not be empty".into()));
         }
         Ok(Self {
             provider,
