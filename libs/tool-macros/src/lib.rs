@@ -4,7 +4,9 @@ use proc_macro_crate::{FoundCrate, crate_name};
 use quote::{format_ident, quote};
 use syn::{FnArg, ItemFn, LitStr, Pat, ReturnType, parse_macro_input};
 
-/// Generate a tool wrapper, preserving the annotated function.
+/// Generate a tool wrapper for a function returning `Result<T, E>`.
+/// The successful value must implement `Serialize` and `JsonSchema`, 
+/// and the error must convert into `tool::ToolError`.
 #[proc_macro_attribute]
 pub fn tool(attributes: TokenStream, item: TokenStream) -> TokenStream {
     let mut name = None;
@@ -124,10 +126,7 @@ fn expand(
         arguments.push(quote!(input.#ident));
     }
 
-    let output = match &signature.output {
-        ReturnType::Default => quote!(()),
-        ReturnType::Type(_, ty) => quote!(#ty),
-    };
+    let output = result_output(&signature.output)?;
 
     let await_call = signature.asyncness.map(|_| quote!(.await));
 
@@ -163,9 +162,39 @@ fn expand(
             fn name(&self) -> &str { #name }
             fn description(&self) -> &str { #description }
 
-            async fn call(&self, input: Self::Input) -> Self::Output {
+            async fn call(&self, input: Self::Input) -> Result<Self::Output, #runtime::ToolError> {
                 #function_name(#(#arguments),*) #await_call
+                    .map_err(::core::convert::Into::<#runtime::ToolError>::into)
             }
         }
     })
+}
+
+fn result_output(output: &ReturnType) -> syn::Result<&syn::Type> {
+    let invalid = || {
+        syn::Error::new_spanned(
+            output,
+            "tools must return Result<T, E> (or a qualified Result<T> alias)",
+        )
+    };
+    let ReturnType::Type(_, ty) = output else {
+        return Err(invalid());
+    };
+    let syn::Type::Path(path) = ty.as_ref() else {
+        return Err(invalid());
+    };
+    let segment = path.path.segments.last().ok_or_else(invalid)?;
+    if segment.ident != "Result" {
+        return Err(invalid());
+    }
+    let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return Err(invalid());
+    };
+    if !(1..=2).contains(&arguments.args.len()) {
+        return Err(invalid());
+    }
+    match arguments.args.first() {
+        Some(syn::GenericArgument::Type(ty)) => Ok(ty),
+        _ => Err(invalid()),
+    }
 }

@@ -10,6 +10,7 @@ use crate::comms::{AgentCommand, AgentEvent};
 pub enum AppError {
     Config(ConfigError),
     Agent(Box<dyn Error + Send + Sync + 'static>),
+    Tool(Box<dyn Error + Send + Sync + 'static>),
     Provider(Box<dyn Error + Send + Sync + 'static>),
     Io(io::Error),
     HttpRequest(reqwest::Error),
@@ -24,6 +25,7 @@ impl fmt::Display for AppError {
         match self {
             Self::Config(error) => write!(f, "failed to load configuration: {error}"),
             Self::Agent(error) => write!(f, "agent failed: {error}"),
+            Self::Tool(error) => write!(f, "{error}"),
             Self::Provider(error) => write!(f, "provider failed: {error}"),
             Self::Io(error) => write!(f, "I/O failed: {error}"),
             Self::HttpRequest(error) => write!(f, "HTTP request failed: {error}"),
@@ -41,6 +43,7 @@ impl Error for AppError {
             Self::Config(error) => Some(error),
             Self::Agent(error) => Some(error.as_ref()),
             Self::Provider(error) => Some(error.as_ref()),
+            Self::Tool(error) => Some(error.as_ref()),
             Self::Io(error) => Some(error),
             Self::HttpRequest(error) => Some(error),
             Self::Json(error) => Some(error),

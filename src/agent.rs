@@ -55,16 +55,11 @@ impl Agent {
             })
             .await?;
 
-        Ok(match tools.get(&call.name) {
-            Some(tool) => match serde_json::from_str(&call.arguments) {
-                Ok(arguments) => match tool.execute(arguments).await {
-                    Ok(value) => value,
-                    Err(error) => serde_json::json!({"error": error.to_string()}),
-                },
-                Err(error) => serde_json::json!({"error": error.to_string()}),
-            },
-            None => serde_json::json!({"error": format!("Unknown tool: {}", call.name)}),
-        })
+        let tool = tools
+            .get(&call.name)
+            .ok_or_else(|| AppError::Agent(format!("Unknown tool: {}", call.name).into()))?;
+        let arguments = serde_json::from_str(&call.arguments)?;
+        tool.execute(arguments).await.map_err(AppError::Tool)
     }
 
     pub async fn run(&mut self) -> Result<(), AppError> {

@@ -18,6 +18,9 @@ use schemars::JsonSchema;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
+/// An execution or JSON conversion failure. Errors are not serialized as output.
+pub type ToolError = Box<dyn std::error::Error + Send + Sync + 'static>;
+
 /// Provider-independent metadata describing a tool's JSON input.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolDefinition {
@@ -30,6 +33,7 @@ pub struct ToolDefinition {
 ///
 /// Inputs must be owned, deserializable values. Outputs must implement
 /// `Serialize` and `JsonSchema`; custom types can derive these traits.
+/// `Output` describes only the successful value, not the `Result` wrapper.
 #[crate::async_trait]
 pub trait Tool: Send + Sync {
     type Input: DeserializeOwned + JsonSchema + Send;
@@ -55,12 +59,12 @@ pub trait Tool: Send + Sync {
         }
     }
 
-    async fn call(&self, input: Self::Input) -> Self::Output;
+    async fn call(&self, input: Self::Input) -> Result<Self::Output, ToolError>;
 
     /// Deserialize arguments, execute the function, and serialize its result.
-    async fn execute(&self, arguments: Value) -> serde_json::Result<Value> {
+    async fn execute(&self, arguments: Value) -> Result<Value, ToolError> {
         let input = serde_json::from_value(arguments)?;
-        serde_json::to_value(self.call(input).await)
+        Ok(serde_json::to_value(self.call(input).await?)?)
     }
 }
 
@@ -71,7 +75,7 @@ pub trait Tool: Send + Sync {
 #[crate::async_trait]
 pub trait DynTool: Send + Sync {
     fn definition(&self) -> ToolDefinition;
-    async fn execute(&self, arguments: Value) -> serde_json::Result<Value>;
+    async fn execute(&self, arguments: Value) -> Result<Value, ToolError>;
 }
 
 #[crate::async_trait]
@@ -80,7 +84,7 @@ impl<T: Tool> DynTool for T {
         Tool::definition(self)
     }
 
-    async fn execute(&self, arguments: Value) -> serde_json::Result<Value> {
+    async fn execute(&self, arguments: Value) -> Result<Value, ToolError> {
         Tool::execute(self, arguments).await
     }
 }
