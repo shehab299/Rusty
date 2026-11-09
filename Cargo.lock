@@ -1811,6 +1811,7 @@ dependencies = [
  "ratatui",
  "ratatui-textarea",
  "reqwest",
+ "schemars",
  "serde",
  "serde_json",
  "tokio",
