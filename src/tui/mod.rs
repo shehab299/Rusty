@@ -205,7 +205,7 @@ impl Tui {
                         self.messages.push(MessageComponent::User {
                             content: content.to_string(),
                         });
-                        self.prompt.clear();
+                        self.prompt.record_submission(content);
                         self.busy = true;
                         self.messages.scroll_to_bottom();
                         self.footer.set_busy_status();
