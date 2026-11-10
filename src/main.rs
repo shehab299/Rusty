@@ -1,4 +1,4 @@
-use crate::{agent::Agent, config::AppConfig, error::AppError, registry::get_tools};
+use crate::{agent::Agent, config::AppConfig, error::AppError, tool_registry::get_tools};
 
 use comms::{AgentCommand, AgentEvent};
 use tokio::sync::mpsc;
@@ -10,7 +10,7 @@ mod config;
 mod error;
 mod model_catalog;
 mod provider_manager;
-mod registry;
+mod tool_registry;
 mod tui;
 
 #[tokio::main]
