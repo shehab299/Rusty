@@ -41,7 +41,7 @@ impl MessageComponent {
 
     pub fn widget(&self) -> Paragraph<'_> {
         match self {
-            Self::User { content } => Paragraph::new(content.as_str())
+            Self::User { content } => Paragraph::new(content.replace("\\n", "\n"))
                 .style(Style::default().add_modifier(Modifier::BOLD))
                 .block(
                     Block::default()
@@ -49,20 +49,21 @@ impl MessageComponent {
                         .border_style(Style::default().fg(Color::Cyan))
                         .padding(Padding::new(1, 0, 0, 0)),
                 ),
-            Self::Assistant { content } => Paragraph::new(content.as_str())
+            Self::Assistant { content } => Paragraph::new(content.replace("\\n", "\n"))
                 .block(Block::default().padding(Padding::new(2, 0, 0, 0))),
-            Self::ToolCall { name, arguments } => Paragraph::new(arguments.as_str()).block(
-                Block::bordered()
-                    .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(Color::DarkGray))
-                    .title(format!(" {name} "))
-                    .title_style(
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD),
-                    )
-                    .padding(Padding::horizontal(1)),
-            ),
+            Self::ToolCall { name, arguments } => Paragraph::new(arguments.replace("\\n", "\n"))
+                .block(
+                    Block::bordered()
+                        .border_type(BorderType::Rounded)
+                        .border_style(Style::default().fg(Color::DarkGray))
+                        .title(format!(" {name} "))
+                        .title_style(
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::BOLD),
+                        )
+                        .padding(Padding::horizontal(1)),
+                ),
             Self::ToolResult {
                 name,
                 output,
@@ -78,20 +79,22 @@ impl MessageComponent {
                 } else {
                     (output.as_str(), Style::default())
                 };
-                Paragraph::new(output).style(output_style).block(
-                    Block::bordered()
-                        .border_type(BorderType::Rounded)
-                        .border_style(Style::default().fg(if *success {
-                            Color::DarkGray
-                        } else {
-                            Color::Red
-                        }))
-                        .title(Line::styled(
-                            format!(" {symbol} {name} {status} "),
-                            Style::default().fg(color).add_modifier(Modifier::BOLD),
-                        ))
-                        .padding(Padding::horizontal(1)),
-                )
+                Paragraph::new(output.replace("\\n", "\n"))
+                    .style(output_style)
+                    .block(
+                        Block::bordered()
+                            .border_type(BorderType::Rounded)
+                            .border_style(Style::default().fg(if *success {
+                                Color::DarkGray
+                            } else {
+                                Color::Red
+                            }))
+                            .title(Line::styled(
+                                format!(" {symbol} {name} {status} "),
+                                Style::default().fg(color).add_modifier(Modifier::BOLD),
+                            ))
+                            .padding(Padding::horizontal(1)),
+                    )
             }
         }
         .wrap(Wrap { trim: false })
