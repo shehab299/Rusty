@@ -84,6 +84,22 @@ impl Tui {
         Ok(())
     }
 
+    fn handle_slash_command_menu_action(&mut self, action: SlashCommandMenuAction) -> bool {
+        match action {
+            SlashCommandMenuAction::Ignored => false,
+            SlashCommandMenuAction::Consumed => true,
+            SlashCommandMenuAction::Complete(command) => {
+                self.prompt.set_content(command.name());
+                self.slash_commands.update(command.name());
+                true
+            }
+            SlashCommandMenuAction::Execute(command) => {
+                self.handle_slash_commands(command.name());
+                true
+            }
+        }
+    }
+
     fn handle_model_popup_action(&mut self, action: ModelPopupAction) {
         match action {
             ModelPopupAction::None => {}
@@ -177,19 +193,9 @@ impl Tui {
             return;
         }
 
-        self.slash_commands.update(&self.prompt.content());
-        match self.slash_commands.handle_key(key) {
-            SlashCommandMenuAction::Ignored => {}
-            SlashCommandMenuAction::Consumed => return,
-            SlashCommandMenuAction::Complete(command) => {
-                self.prompt.set_content(command.name());
-                self.slash_commands.update(command.name());
-                return;
-            }
-            SlashCommandMenuAction::Execute(command) => {
-                self.handle_slash_commands(command.name());
-                return;
-            }
+        let action = self.slash_commands.handle_key(key);
+        if self.handle_slash_command_menu_action(action) {
+            return;
         }
 
         match (key.code, key.modifiers) {

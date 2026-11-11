@@ -61,25 +61,28 @@ impl SlashCommandMenu {
         }
 
         match (key.code, key.modifiers) {
-            (KeyCode::Up, KeyModifiers::NONE) => self.previous(),
-            (KeyCode::Down, KeyModifiers::NONE) => self.next(),
-            (KeyCode::Esc, _) => self.visible = false,
-            (KeyCode::Tab, KeyModifiers::NONE) => {
-                return self.selected().map_or(
-                    SlashCommandMenuAction::Consumed,
-                    SlashCommandMenuAction::Complete,
-                );
+            (KeyCode::Up, KeyModifiers::NONE) => {
+                self.previous();
+                SlashCommandMenuAction::Consumed
             }
-            (KeyCode::Enter, KeyModifiers::NONE) => {
-                return self.selected().map_or(
-                    SlashCommandMenuAction::Consumed,
-                    SlashCommandMenuAction::Execute,
-                );
+            (KeyCode::Down, KeyModifiers::NONE) => {
+                self.next();
+                SlashCommandMenuAction::Consumed
             }
-            _ => return SlashCommandMenuAction::Ignored,
+            (KeyCode::Esc, _) => {
+                self.visible = false;
+                SlashCommandMenuAction::Consumed
+            }
+            (KeyCode::Tab, KeyModifiers::NONE) => self.selected().map_or(
+                SlashCommandMenuAction::Consumed,
+                SlashCommandMenuAction::Complete,
+            ),
+            (KeyCode::Enter, KeyModifiers::NONE) => self.selected().map_or(
+                SlashCommandMenuAction::Consumed,
+                SlashCommandMenuAction::Execute,
+            ),
+            _ => SlashCommandMenuAction::Ignored,
         }
-
-        SlashCommandMenuAction::Consumed
     }
 
     pub fn update(&mut self, content: &str) {
@@ -154,4 +157,3 @@ impl Render for SlashCommandMenu {
         f.render_stateful_widget(list, area, &mut state);
     }
 }
-
