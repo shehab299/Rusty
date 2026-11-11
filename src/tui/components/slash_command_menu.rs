@@ -12,15 +12,17 @@ use ratatui::{
 pub enum SlashCommand {
     Connect,
     Models,
+    CD,
 }
 
 impl SlashCommand {
-    const ALL: [Self; 2] = [Self::Connect, Self::Models];
+    const ALL: [Self; 3] = [Self::Connect, Self::Models, Self::CD];
 
     pub fn name(self) -> &'static str {
         match self {
             Self::Connect => "/connect",
             Self::Models => "/models",
+            Self::CD => "/cd",
         }
     }
 
@@ -28,13 +30,20 @@ impl SlashCommand {
         match self {
             Self::Connect => "Connect a provider",
             Self::Models => "Select a model",
+            Self::CD => "Change working directory",
         }
     }
 
-    pub fn parse(input: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|command| command.name() == input)
+    pub fn parse(input: &str) -> (Option<Self>, Vec<&str>) {
+        let mut words = input.split_whitespace();
+        let name = words.next();
+
+        if let Some(name) = name {
+            let command = Self::ALL.into_iter().find(|command| command.name() == name);
+            return (command, words.collect());
+        }
+
+        (None, words.collect())
     }
 }
 

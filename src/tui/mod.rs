@@ -2,6 +2,7 @@ use std::io;
 
 use crate::error::AppError;
 use crate::model_catalog::Catalog;
+use crate::tui::SlashCommand::CD;
 use crate::{
     comms::{AgentCommand, AgentEvent},
     config::provider::{
@@ -148,7 +149,9 @@ impl Tui {
             return false;
         }
 
-        match SlashCommand::parse(&command) {
+        let (slash_command, args) = SlashCommand::parse(&command);
+
+        match slash_command {
             Some(SlashCommand::Connect) => {
                 self.provider_popup = Some(ProviderPopup::new(self.provider_manager.configured()));
                 self.prompt.clear();
@@ -157,6 +160,21 @@ impl Tui {
             }
             Some(SlashCommand::Models) => {
                 self.model_popup.open();
+                self.prompt.clear();
+                self.slash_commands_menu.update("");
+                true
+            }
+            Some(CD) => {
+                let error = match args.first() {
+                    Some(path) => std::env::set_current_dir(path)
+                        .err()
+                        .map(|error| format!("Failed to change directory to {path}: {error}")),
+                    None => Some("Usage: /cd <path>".to_string()),
+                };
+                if let Some(content) = error {
+                    self.messages.push(MessageComponent::Error { content });
+                    self.messages.scroll_to_bottom();
+                }
                 self.prompt.clear();
                 self.slash_commands_menu.update("");
                 true
