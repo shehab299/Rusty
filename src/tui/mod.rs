@@ -11,7 +11,8 @@ use crate::{
 };
 use components::{
     FooterComponent, MessageComponent, MessagesComponent, ModelPopup, ModelPopupAction,
-    PromptComponent, ProviderPopup, ProviderPopupAction, Render,
+    PromptComponent, ProviderPopup, ProviderPopupAction, Render, SlashCommand, SlashCommandMenu,
+    SlashCommandMenuAction,
 };
 use crossterm::event::{Event as TerminalEvent, EventStream, KeyCode, KeyEventKind, KeyModifiers};
 use futures_util::StreamExt;
@@ -30,6 +31,7 @@ pub struct Tui {
 
     messages: MessagesComponent,
     prompt: PromptComponent,
+    slash_commands: SlashCommandMenu,
     footer: FooterComponent,
     provider_popup: Option<ProviderPopup>,
     model_popup: ModelPopup,
@@ -56,6 +58,7 @@ impl Tui {
             events_rx: events,
             messages: MessagesComponent::default(),
             prompt: PromptComponent::new(),
+            slash_commands: SlashCommandMenu::default(),
             footer: FooterComponent::new(),
             busy: false,
             should_quit: false,
@@ -129,15 +132,17 @@ impl Tui {
             return false;
         }
 
-        match command.as_str() {
-            "/connect" => {
+        match SlashCommand::parse(&command) {
+            Some(SlashCommand::Connect) => {
                 self.provider_popup = Some(ProviderPopup::new(self.provider_manager.configured()));
                 self.prompt.clear();
+                self.slash_commands.update("");
                 true
             }
-            "/models" => {
+            Some(SlashCommand::Models) => {
                 self.model_popup.open();
                 self.prompt.clear();
+                self.slash_commands.update("");
                 true
             }
             _ => false,
@@ -170,6 +175,21 @@ impl Tui {
             let popup_action = popup.handle_key(key);
             self.handle_provider_popup_action(popup_action, popup);
             return;
+        }
+
+        self.slash_commands.update(&self.prompt.content());
+        match self.slash_commands.handle_key(key) {
+            SlashCommandMenuAction::Ignored => {}
+            SlashCommandMenuAction::Consumed => return,
+            SlashCommandMenuAction::Complete(command) => {
+                self.prompt.set_content(command.name());
+                self.slash_commands.update(command.name());
+                return;
+            }
+            SlashCommandMenuAction::Execute(command) => {
+                self.handle_slash_commands(command.name());
+                return;
+            }
         }
 
         match (key.code, key.modifiers) {
@@ -214,6 +234,7 @@ impl Tui {
                 self.prompt.input(Input::from(key));
             }
         }
+        self.slash_commands.update(&self.prompt.content());
     }
 
     fn handle_agent_event(&mut self, event: AgentEvent) {
@@ -298,14 +319,16 @@ impl Render for Tui {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Fill(1),
+                Constraint::Length(self.slash_commands.height()),
                 Constraint::Length(self.prompt.height(f.area().height)),
                 Constraint::Length(1),
             ]);
 
         let areas = layout.split(f.area());
 
-        self.footer.render(f, areas[2]);
-        self.prompt.render(f, areas[1]);
+        self.footer.render(f, areas[3]);
+        self.prompt.render(f, areas[2]);
+        self.slash_commands.render(f, areas[1]);
         self.messages.render(f, areas[0]);
         if let Some(popup) = &self.provider_popup {
             popup.render(f, f.area());

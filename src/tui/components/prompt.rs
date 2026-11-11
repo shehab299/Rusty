@@ -55,6 +55,11 @@ impl PromptComponent {
         self.draft.clear();
     }
 
+    pub fn set_content(&mut self, content: &str) {
+        self.clear();
+        self.prompt.insert_str(content);
+    }
+
     pub fn record_submission(&mut self, content: String) {
         self.history.push(content);
         self.clear();
