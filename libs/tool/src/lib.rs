@@ -17,6 +17,7 @@ pub mod __private {
 use schemars::JsonSchema;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
+use tokio::sync::mpsc::{Sender, error::SendError};
 
 /// An execution or JSON conversion failure. Errors are not serialized as output.
 pub type ToolError = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -27,6 +28,43 @@ pub struct ToolDefinition {
     pub name: String,
     pub description: String,
     pub parameters: Value,
+}
+
+/// An incremental update associated with one tool invocation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolDelta {
+    pub id: String,
+    pub content: String,
+}
+
+/// Execution-only state, supplied by the caller rather than JSON arguments.
+///
+/// The receiver must be consumed concurrently with tool execution: emitting
+/// waits for space when the bounded channel is full. Cloned contexts retain
+/// the same tool-call ID.
+#[derive(Debug, Clone)]
+pub struct ToolContext {
+    call_id: String,
+    updates: Sender<ToolDelta>,
+}
+
+impl ToolContext {
+    pub fn new(call_id: impl Into<String>, updates: Sender<ToolDelta>) -> Self {
+        Self {
+            call_id: call_id.into(),
+            updates,
+        }
+    }
+
+    /// Emit an update, or return an error if the receiver has been dropped.
+    pub async fn emit(&self, content: impl Into<String>) -> Result<(), SendError<ToolDelta>> {
+        self.updates
+            .send(ToolDelta {
+                id: self.call_id.clone(),
+                content: content.into(),
+            })
+            .await
+    }
 }
 
 /// A typed tool with JSON input/output schemas and asynchronous execution.
@@ -59,12 +97,16 @@ pub trait Tool: Send + Sync {
         }
     }
 
-    async fn call(&self, input: Self::Input) -> Result<Self::Output, ToolError>;
+    async fn call(
+        &self,
+        input: Self::Input,
+        context: ToolContext,
+    ) -> Result<Self::Output, ToolError>;
 
     /// Deserialize arguments, execute the function, and serialize its result.
-    async fn execute(&self, arguments: Value) -> Result<Value, ToolError> {
+    async fn execute(&self, arguments: Value, context: ToolContext) -> Result<Value, ToolError> {
         let input = serde_json::from_value(arguments)?;
-        Ok(serde_json::to_value(self.call(input).await?)?)
+        Ok(serde_json::to_value(self.call(input, context).await?)?)
     }
 }
 
@@ -75,7 +117,7 @@ pub trait Tool: Send + Sync {
 #[crate::async_trait]
 pub trait DynTool: Send + Sync {
     fn definition(&self) -> ToolDefinition;
-    async fn execute(&self, arguments: Value) -> Result<Value, ToolError>;
+    async fn execute(&self, arguments: Value, context: ToolContext) -> Result<Value, ToolError>;
 }
 
 #[crate::async_trait]
@@ -84,7 +126,7 @@ impl<T: Tool> DynTool for T {
         Tool::definition(self)
     }
 
-    async fn execute(&self, arguments: Value) -> Result<Value, ToolError> {
-        Tool::execute(self, arguments).await
+    async fn execute(&self, arguments: Value, context: ToolContext) -> Result<Value, ToolError> {
+        Tool::execute(self, arguments, context).await
     }
 }

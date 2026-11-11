@@ -5,20 +5,30 @@ use quote::{format_ident, quote};
 use syn::{FnArg, ItemFn, LitStr, Pat, ReturnType, parse_macro_input};
 
 /// Generate a tool wrapper for a function returning `Result<T, E>`.
-/// The successful value must implement `Serialize` and `JsonSchema`, 
+/// The successful value must implement `Serialize` and `JsonSchema`,
 /// and the error must convert into `tool::ToolError`.
+/// Use `context = parameter_name` to inject an owned `ToolContext` parameter
+/// without including it in the tool's JSON input schema.
 #[proc_macro_attribute]
 pub fn tool(attributes: TokenStream, item: TokenStream) -> TokenStream {
     let mut name = None;
     let mut description = None;
+    let mut context = None;
 
     let parser = syn::meta::parser(|meta| {
+        if meta.path.is_ident("context") {
+            if context.is_some() {
+                return Err(meta.error("duplicate tool option"));
+            }
+            context = Some(meta.value()?.parse::<syn::Ident>()?);
+            return Ok(());
+        }
         let target = if meta.path.is_ident("name") {
             &mut name
         } else if meta.path.is_ident("description") {
             &mut description
         } else {
-            return Err(meta.error("expected `name` or `description`"));
+            return Err(meta.error("expected `name`, `description`, or `context`"));
         };
         if target.is_some() {
             return Err(meta.error("duplicate tool option"));
@@ -31,7 +41,7 @@ pub fn tool(attributes: TokenStream, item: TokenStream) -> TokenStream {
 
     let function = parse_macro_input!(item as ItemFn);
 
-    expand(function, name, description)
+    expand(function, name, description, context)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
@@ -40,6 +50,7 @@ fn expand(
     function: ItemFn,
     name: Option<LitStr>,
     description: Option<LitStr>,
+    context: Option<syn::Ident>,
 ) -> syn::Result<proc_macro2::TokenStream> {
     let signature = &function.sig;
 
@@ -90,6 +101,8 @@ fn expand(
     let mut fields = Vec::new();
 
     let mut arguments = Vec::new();
+    let mut context_found = false;
+    let context_argument = format_ident!("__tool_context", span = proc_macro2::Span::mixed_site());
 
     for argument in &signature.inputs {
         let FnArg::Typed(argument) = argument else {
@@ -122,8 +135,20 @@ fn expand(
 
         let ident = &pattern.ident;
         let ty = &argument.ty;
+        if context.as_ref() == Some(ident) {
+            context_found = true;
+            arguments.push(quote!(#context_argument));
+            continue;
+        }
         fields.push(quote!(pub #ident: #ty));
         arguments.push(quote!(input.#ident));
+    }
+
+    if let Some(context) = context.filter(|_| !context_found) {
+        return Err(syn::Error::new_spanned(
+            context,
+            "context must name a function parameter",
+        ));
     }
 
     let output = result_output(&signature.output)?;
@@ -162,7 +187,11 @@ fn expand(
             fn name(&self) -> &str { #name }
             fn description(&self) -> &str { #description }
 
-            async fn call(&self, input: Self::Input) -> Result<Self::Output, #runtime::ToolError> {
+            async fn call(
+                &self,
+                input: Self::Input,
+                #context_argument: #runtime::ToolContext,
+            ) -> Result<Self::Output, #runtime::ToolError> {
                 #function_name(#(#arguments),*) #await_call
                     .map_err(::core::convert::Into::<#runtime::ToolError>::into)
             }
