@@ -3,11 +3,21 @@ use crate::{
     error::AppError,
     provider_manager::ModelSelection,
 };
+
 use ai_sdk::{GenerateRequest, Message, Tool, ToolCall, generate_text, providers::Provider};
+use tool::{DynTool, ToolContext, ToolDelta};
+
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
 use tokio::sync::mpsc::{Receiver, Sender};
-use tool::{DynTool, ToolContext, ToolDelta};
+
+fn display_tool_result(value: &Value) -> Result<String, serde_json::Error> {
+    match value {
+        Value::Null => Ok(String::new()),
+        Value::String(text) => Ok(text.clone()),
+        _ => serde_json::to_string_pretty(value),
+    }
+}
 
 pub struct Agent {
     selection: Option<ModelSelection>,
@@ -47,7 +57,9 @@ impl Agent {
         tools: &HashMap<String, Box<dyn DynTool>>,
         call: &ToolCall,
         events_sender: &Sender<AgentEvent>,
-    ) -> Result<Value, AppError> {
+    ) -> Result<Message, AppError> {
+        let (tool_tx, mut tool_rx) = tokio::sync::mpsc::channel::<ToolDelta>(100);
+
         events_sender
             .send(AgentEvent::ToolCall {
                 id: call.id.clone(),
@@ -55,30 +67,56 @@ impl Agent {
                 arguments: call.arguments.clone(),
             })
             .await?;
-        let tool = tools
-            .get(&call.name)
-            .ok_or_else(|| AppError::Agent(format!("Unknown tool: {}", call.name).into()))?;
-        let arguments = serde_json::from_str(&call.arguments)?;
-        let (tool_tx, mut tool_rx) = tokio::sync::mpsc::channel::<ToolDelta>(100);
-        let context = ToolContext::new(call.id.clone(), tool_tx);
-        let result = {
-            let execution = tool.execute(arguments, context);
-            tokio::pin!(execution);
-            loop {
-                tokio::select! {
-                    biased;
-                    Some(delta) = tool_rx.recv() => {
-                        events_sender.send(AgentEvent::ToolDelta(delta)).await?;
+
+        let result = async {
+            let tool = tools
+                .get(&call.name)
+                .ok_or_else(|| AppError::Agent(format!("Unknown tool: {}", call.name).into()))?;
+
+            let result = {
+                let arguments = serde_json::from_str(&call.arguments)?;
+                let context = ToolContext::new(call.id.clone(), tool_tx);
+
+                let execution = tool.execute(arguments, context);
+                tokio::pin!(execution);
+
+                loop {
+                    tokio::select! {
+                        biased;
+                        Some(delta) = tool_rx.recv() => {
+                            events_sender.send(AgentEvent::ToolDelta(delta)).await?;
+                        }
+                        result = &mut execution => break result,
                     }
-                    result = &mut execution => break result,
                 }
+            };
+
+            while let Ok(delta) = tool_rx.try_recv() {
+                events_sender.send(AgentEvent::ToolDelta(delta)).await?;
+            }
+
+            result.map_err(AppError::Tool)
+        }
+        .await;
+
+        let (output, content, success) = match result {
+            Ok(value) => (display_tool_result(&value)?, value.to_string(), true),
+            Err(error) => {
+                let output = error.to_string();
+                (output.clone(), output, false)
             }
         };
-        // Flush updates queued in the same poll that completed the tool.
-        while let Ok(delta) = tool_rx.try_recv() {
-            events_sender.send(AgentEvent::ToolDelta(delta)).await?;
-        }
-        result.map_err(AppError::Tool)
+
+        events_sender
+            .send(AgentEvent::ToolResult {
+                id: call.id.clone(),
+                name: call.name.clone(),
+                output,
+                success,
+            })
+            .await?;
+
+        Ok(Message::tool_result(call.id.clone(), content))
     }
 
     pub async fn run(&mut self) -> Result<(), AppError> {
@@ -201,41 +239,9 @@ impl Agent {
             }
 
             for call in calls {
-                let result = Self::execute_tool(tools, &call, events_sender).await;
-
-                let (event, message) = match result {
-                    Ok(v) => (
-                        AgentEvent::ToolResult {
-                            id: call.id.clone(),
-                            name: call.name,
-                            output: display_tool_result(&v)?,
-                            success: true,
-                        },
-                        Message::tool_result(call.id, v.to_string()),
-                    ),
-
-                    Err(e) => (
-                        AgentEvent::ToolResult {
-                            id: call.id.clone(),
-                            name: call.name,
-                            output: e.to_string(),
-                            success: false,
-                        },
-                        Message::tool_result(call.id, e.to_string()),
-                    ),
-                };
-
-                events_sender.send(event).await?;
+                let message = Self::execute_tool(tools, &call, events_sender).await?;
                 context.push(message);
             }
         }
-    }
-}
-
-fn display_tool_result(value: &Value) -> Result<String, serde_json::Error> {
-    match value {
-        Value::Null => Ok(String::new()),
-        Value::String(text) => Ok(text.clone()),
-        _ => serde_json::to_string_pretty(value),
     }
 }

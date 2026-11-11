@@ -1,7 +1,8 @@
-use std::process::Stdio;
-use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
+use std::{process::Stdio, time::Duration};
+use tokio::{
+    io::{AsyncBufReadExt, BufReader},
+    process::Command,
+};
 use tool::{ToolContext, ToolError, tool};
 
 #[tool(context = context, description = "Execute a command in user's shell environment")]
