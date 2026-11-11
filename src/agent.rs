@@ -33,6 +33,7 @@ impl Agent {
         tools: Vec<Box<dyn DynTool>>,
         events_sender: Sender<AgentEvent>,
         commands_receiver: Receiver<AgentCommand>,
+        selection: Option<ModelSelection>,
     ) -> Result<Self, AppError> {
         let mut registered = HashMap::new();
         for tool in tools {
@@ -45,7 +46,7 @@ impl Agent {
         }
 
         Ok(Self {
-            selection: None,
+            selection,
             context: vec![Message::system(system_message)],
             tools: registered,
             events_sender,

@@ -1,3 +1,4 @@
+use crate::provider_manager::ProviderManager;
 use crate::{agent::Agent, config::AppConfig, error::AppError, tool_registry::get_tools};
 
 use comms::{AgentCommand, AgentEvent};
@@ -17,6 +18,12 @@ mod tui;
 async fn main() -> Result<(), AppError> {
     let config = AppConfig::load().map_err(AppError::Config)?;
     let catalog = model_catalog::load_catalog().await?;
+    let provider_manager = ProviderManager::from_config(config.provider)?;
+    let selection = config
+        .model
+        .filter(|model| catalog.has_model(&model.provider.to_string(), &model.model))
+        .map(|model| provider_manager.select(model.provider, model.model))
+        .transpose()?;
 
     let (commands_tx, commands_rx) = mpsc::channel::<AgentCommand>(100);
     let (events_tx, events_rx) = mpsc::channel::<AgentEvent>(100);
@@ -26,14 +33,16 @@ async fn main() -> Result<(), AppError> {
         get_tools(),
         events_tx,
         commands_rx,
+        selection,
     )?;
 
     let agent_task = tokio::spawn(async move { agent.run().await });
 
     let terminal_result = {
-        let mut tui = Tui::new(commands_tx.clone(), events_rx, config.provider, catalog)?;
+        let mut tui = Tui::new(commands_tx.clone(), events_rx, provider_manager, catalog)?;
         tui.run().await
     };
+
     let _ = commands_tx.send(AgentCommand::Shutdown).await;
 
     let agent_result = agent_task.await.map_err(AppError::Task)?;

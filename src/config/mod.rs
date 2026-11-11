@@ -1,19 +1,19 @@
 //! Provider settings loaded from TOML and environment variables.
 
 use std::path::Path;
-
 use config::{Config, ConfigError, Environment, File};
 use serde::Deserialize;
+use provider::{ProviderId, ProvidersConfig};
 
 pub mod home;
 pub mod provider;
 
-use provider::ProvidersConfig;
 
 #[derive(Clone, Default, Deserialize)]
 pub struct AppConfig {
     #[serde(default)]
     pub provider: ProvidersConfig,
+    pub model: Option<ModelConfig>,
 }
 
 impl AppConfig {
@@ -34,4 +34,11 @@ impl AppConfig {
             .build()?
             .try_deserialize()
     }
+}
+
+
+#[derive(Clone, Deserialize)]
+pub struct ModelConfig {
+    pub provider: ProviderId,
+    pub model: String,
 }

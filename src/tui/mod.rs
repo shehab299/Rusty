@@ -6,7 +6,6 @@ use crate::{
     comms::{AgentCommand, AgentEvent},
     config::provider::{
         AnthropicConfig, OpenAIConfig, OpenRouterConfig, ProviderConfig, ProviderId,
-        ProvidersConfig,
     },
     provider_manager::ProviderManager,
 };
@@ -45,11 +44,9 @@ impl Tui {
     pub fn new(
         commands: Sender<AgentCommand>,
         events: Receiver<AgentEvent>,
-        config: ProvidersConfig,
+        provider_manager: ProviderManager,
         catalog: Catalog,
     ) -> Result<Self, AppError> {
-        let provider_manager = ProviderManager::from_config(config)?;
-
         let mut model_popup = ModelPopup::new(catalog);
         model_popup.set_configured_providers(provider_manager.configured());
 

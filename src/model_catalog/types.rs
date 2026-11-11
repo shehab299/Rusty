@@ -9,6 +9,14 @@ use serde::Deserialize;
 pub struct Catalog(BTreeMap<String, CatalogProvider>);
 
 impl Catalog {
+
+    /// Check whether a provider's catalog contains the given model ID.
+    pub fn has_model(&self, provider: &str, model: &str) -> bool {
+        self.0
+            .get(provider)
+            .is_some_and(|p| p.models.contains_key(model))
+    }
+
     /// List a provider's models in stable model-ID order.
     pub fn models(&self, provider: &str) -> impl Iterator<Item = &CatalogModel> + use<'_> {
         self.0
