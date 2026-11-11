@@ -187,7 +187,7 @@ impl Agent {
                     Ok(v) => (
                         AgentEvent::ToolResult {
                             name: call.name,
-                            output: serde_json::to_string_pretty(&v)?,
+                            output: display_tool_result(&v)?,
                             success: true,
                         },
                         Message::tool_result(call.id, v.to_string()),
@@ -207,5 +207,13 @@ impl Agent {
                 context.push(message);
             }
         }
+    }
+}
+
+fn display_tool_result(value: &Value) -> Result<String, serde_json::Error> {
+    match value {
+        Value::Null => Ok(String::new()),
+        Value::String(text) => Ok(text.clone()),
+        _ => serde_json::to_string_pretty(value),
     }
 }
