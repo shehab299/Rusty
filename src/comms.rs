@@ -17,10 +17,13 @@ pub enum AgentEvent {
     Completed,
     Failed(String),
     ToolCall {
+        id: String,
         name: String,
         arguments: String,
     },
+    ToolDelta(tool::ToolDelta),
     ToolResult {
+        id: String,
         name: String,
         output: String,
         success: bool,

@@ -7,7 +7,7 @@ use ai_sdk::{GenerateRequest, Message, Tool, ToolCall, generate_text, providers:
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
 use tokio::sync::mpsc::{Receiver, Sender};
-use tool::DynTool;
+use tool::{DynTool, ToolContext, ToolDelta};
 
 pub struct Agent {
     selection: Option<ModelSelection>,
@@ -45,21 +45,40 @@ impl Agent {
 
     async fn execute_tool(
         tools: &HashMap<String, Box<dyn DynTool>>,
-        events_sender: &Sender<AgentEvent>,
         call: &ToolCall,
+        events_sender: &Sender<AgentEvent>,
     ) -> Result<Value, AppError> {
         events_sender
             .send(AgentEvent::ToolCall {
+                id: call.id.clone(),
                 name: call.name.clone(),
                 arguments: call.arguments.clone(),
             })
             .await?;
-
         let tool = tools
             .get(&call.name)
             .ok_or_else(|| AppError::Agent(format!("Unknown tool: {}", call.name).into()))?;
         let arguments = serde_json::from_str(&call.arguments)?;
-        tool.execute(arguments).await.map_err(AppError::Tool)
+        let (tool_tx, mut tool_rx) = tokio::sync::mpsc::channel::<ToolDelta>(100);
+        let context = ToolContext::new(call.id.clone(), tool_tx);
+        let result = {
+            let execution = tool.execute(arguments, context);
+            tokio::pin!(execution);
+            loop {
+                tokio::select! {
+                    biased;
+                    Some(delta) = tool_rx.recv() => {
+                        events_sender.send(AgentEvent::ToolDelta(delta)).await?;
+                    }
+                    result = &mut execution => break result,
+                }
+            }
+        };
+        // Flush updates queued in the same poll that completed the tool.
+        while let Ok(delta) = tool_rx.try_recv() {
+            events_sender.send(AgentEvent::ToolDelta(delta)).await?;
+        }
+        result.map_err(AppError::Tool)
     }
 
     pub async fn run(&mut self) -> Result<(), AppError> {
@@ -176,16 +195,18 @@ impl Agent {
             if !text.is_empty() {
                 events_sender.send(AgentEvent::TextDelta(text)).await?;
             }
+
             if calls.is_empty() {
                 return Ok(());
             }
 
             for call in calls {
-                let result = Self::execute_tool(tools, events_sender, &call).await;
+                let result = Self::execute_tool(tools, &call, events_sender).await;
 
                 let (event, message) = match result {
                     Ok(v) => (
                         AgentEvent::ToolResult {
+                            id: call.id.clone(),
                             name: call.name,
                             output: display_tool_result(&v)?,
                             success: true,
@@ -195,6 +216,7 @@ impl Agent {
 
                     Err(e) => (
                         AgentEvent::ToolResult {
+                            id: call.id.clone(),
                             name: call.name,
                             output: e.to_string(),
                             success: false,

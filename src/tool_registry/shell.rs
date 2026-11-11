@@ -2,12 +2,14 @@ use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-use tool::{ToolError, tool};
+use tool::{ToolContext, ToolError, tool};
 
-#[tool(description = "Execute a command in user's shell environment")]
-pub async fn shell(command: String, timeout: Option<u64>) -> Result<String, ToolError> {
-    let mut shell_result = Vec::<String>::new();
-
+#[tool(context = context, description = "Execute a command in user's shell environment")]
+pub async fn shell(
+    command: String,
+    timeout: Option<u64>,
+    context: ToolContext,
+) -> Result<String, ToolError> {
     let mut child = Command::new("bash")
         .arg("-c")
         .arg(command)
@@ -43,8 +45,9 @@ pub async fn shell(command: String, timeout: Option<u64>) -> Result<String, Tool
         tokio::select! {
             result = stdout_reader.next_line(), if stdout_open => {
                 match result? {
-                    Some(line) => {
-                        shell_result.push(line);
+                    Some(mut line) => {
+                        line.push('\n');
+                        context.emit(line).await?;
                     },
                     None => stdout_open = false
                 }
@@ -52,8 +55,9 @@ pub async fn shell(command: String, timeout: Option<u64>) -> Result<String, Tool
 
             result = stderr_reader.next_line(), if stderr_open => {
                 match result? {
-                    Some(line) => {
-                        shell_result.push(line);
+                    Some(mut line) => {
+                        line.push('\n');
+                        context.emit(line).await?;
                     },
                     None => stderr_open = false
                 }
@@ -65,7 +69,7 @@ pub async fn shell(command: String, timeout: Option<u64>) -> Result<String, Tool
 
             _ = &mut deadline => {
 
-                shell_result.push("Command timed out!".to_string());
+                context.emit("Command timed out!\n").await?;
 
                 if exit_status.is_none() {
                     child.kill().await?;
@@ -76,5 +80,5 @@ pub async fn shell(command: String, timeout: Option<u64>) -> Result<String, Tool
         };
     }
 
-    Ok(shell_result.join("\n"))
+    Ok("".to_string())
 }

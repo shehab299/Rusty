@@ -231,33 +231,32 @@ impl Tui {
                 self.footer.set_busy_status();
             }
             AgentEvent::Completed => {
+                self.messages.fail_running_tools("Cancelled.");
                 self.busy = false;
                 self.footer.set_default_status();
             }
             AgentEvent::Failed(error) => {
                 self.busy = false;
                 self.footer.set_status(error.clone());
-                self.messages.push(MessageComponent::ToolResult {
-                    name: "Request".into(),
-                    output: error,
-                    success: false,
-                });
+                self.messages.fail_running_tools(&error);
+                self.messages
+                    .push(MessageComponent::Error { content: error });
             }
             AgentEvent::TextDelta(content) => {
                 self.messages.push(MessageComponent::Assistant { content })
             }
-            AgentEvent::ToolCall { name, arguments } => self
-                .messages
-                .push(MessageComponent::ToolCall { name, arguments }),
+            AgentEvent::ToolDelta(delta) => self.messages.update_tool(delta),
+            AgentEvent::ToolCall {
+                id,
+                name,
+                arguments,
+            } => self.messages.start_tool(id, name, arguments),
             AgentEvent::ToolResult {
+                id,
                 name,
                 output,
                 success,
-            } => self.messages.push(MessageComponent::ToolResult {
-                name,
-                output,
-                success,
-            }),
+            } => self.messages.finish_tool(id, name, output, success),
         }
     }
 

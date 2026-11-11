@@ -1,6 +1,6 @@
 use crate::tui::components::Render;
-pub use message::MessageComponent;
 use message::render_message;
+pub use message::{MessageComponent, ToolStatus};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -22,6 +22,81 @@ pub struct MessagesComponent {
 impl MessagesComponent {
     pub fn push(&mut self, message: MessageComponent) {
         self.messages.push(message);
+    }
+
+    pub fn update_tool(&mut self, delta: tool::ToolDelta) {
+        for message in self.messages.iter_mut().rev() {
+            if let MessageComponent::ToolOutput {
+                id, output, status, ..
+            } = message
+            {
+                if *id == delta.id && *status == ToolStatus::Executing {
+                    output.push_str(&delta.content);
+                    return;
+                }
+            }
+        }
+    }
+
+    pub fn start_tool(&mut self, id: String, name: String, arguments: String) {
+        self.push(MessageComponent::ToolCall {
+            name: name.clone(),
+            arguments,
+        });
+        self.push(MessageComponent::ToolOutput {
+            id,
+            name,
+            output: String::new(),
+            status: ToolStatus::Executing,
+        });
+    }
+
+    pub fn finish_tool(&mut self, id: String, name: String, output: String, success: bool) {
+        let status = if success {
+            ToolStatus::Success
+        } else {
+            ToolStatus::Failure
+        };
+        for message in self.messages.iter_mut().rev() {
+            if let MessageComponent::ToolOutput {
+                id: call_id,
+                output: accumulated,
+                status: current_status,
+                ..
+            } = message
+            {
+                if *call_id == id {
+                    if !output.is_empty() {
+                        if !accumulated.is_empty() && !accumulated.ends_with('\n') {
+                            accumulated.push('\n');
+                        }
+                        accumulated.push_str(&output);
+                    }
+                    *current_status = status;
+                    return;
+                }
+            }
+        }
+        self.push(MessageComponent::ToolOutput {
+            id,
+            name,
+            output,
+            status,
+        });
+    }
+
+    pub fn fail_running_tools(&mut self, reason: &str) {
+        for message in &mut self.messages {
+            if let MessageComponent::ToolOutput { output, status, .. } = message {
+                if *status == ToolStatus::Executing {
+                    *status = ToolStatus::Failure;
+                    if !output.is_empty() {
+                        output.push('\n');
+                    }
+                    output.push_str(reason);
+                }
+            }
+        }
     }
 
     pub fn scroll_up(&mut self) {

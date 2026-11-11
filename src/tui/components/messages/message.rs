@@ -8,6 +8,13 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Padding, Paragraph, Widget, Wrap},
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolStatus {
+    Executing,
+    Failure,
+    Success,
+}
+
 pub enum MessageComponent {
     User {
         content: String,
@@ -15,14 +22,18 @@ pub enum MessageComponent {
     Assistant {
         content: String,
     },
+    Error {
+        content: String,
+    },
     ToolCall {
         name: String,
         arguments: String,
     },
-    ToolResult {
+    ToolOutput {
+        id: String,
         name: String,
         output: String,
-        success: bool,
+        status: ToolStatus,
     },
 }
 
@@ -30,8 +41,8 @@ impl MessageComponent {
     pub fn height(&self, width: u16) -> u16 {
         // Paragraph expects the content width, excluding horizontal borders/padding.
         let horizontal_space = match self {
-            Self::User { .. } | Self::Assistant { .. } => 2,
-            Self::ToolCall { .. } | Self::ToolResult { .. } => 4,
+            Self::User { .. } | Self::Assistant { .. } | Self::Error { .. } => 2,
+            Self::ToolCall { .. } | Self::ToolOutput { .. } => 4,
         };
         let content_width = width.saturating_sub(horizontal_space);
         self.widget()
@@ -51,6 +62,9 @@ impl MessageComponent {
                 ),
             Self::Assistant { content } => Paragraph::new(content.replace("\\n", "\n"))
                 .block(Block::default().padding(Padding::new(2, 0, 0, 0))),
+            Self::Error { content } => Paragraph::new(content.replace("\\n", "\n"))
+                .style(Style::default().fg(Color::Red))
+                .block(Block::default().padding(Padding::new(2, 0, 0, 0))),
             Self::ToolCall { name, arguments } => Paragraph::new(arguments.replace("\\n", "\n"))
                 .block(
                     Block::bordered()
@@ -64,18 +78,26 @@ impl MessageComponent {
                         )
                         .padding(Padding::horizontal(1)),
                 ),
-            Self::ToolResult {
+            Self::ToolOutput {
                 name,
                 output,
-                success,
+                status,
+                ..
             } => {
-                let (symbol, status, color) = if *success {
-                    ("✓", "completed", Color::Green)
-                } else {
-                    ("✗", "failed", Color::Red)
+                let (symbol, label, color) = match status {
+                    ToolStatus::Executing => ("…", "executing", Color::Yellow),
+                    ToolStatus::Success => ("✓", "completed", Color::Green),
+                    ToolStatus::Failure => ("✗", "failed", Color::Red),
                 };
                 let (output, output_style) = if output.is_empty() {
-                    ("No output.", Style::default().fg(Color::DarkGray))
+                    (
+                        if *status == ToolStatus::Executing {
+                            "Waiting for output…"
+                        } else {
+                            "No output."
+                        },
+                        Style::default().fg(Color::DarkGray),
+                    )
                 } else {
                     (output.as_str(), Style::default())
                 };
@@ -84,13 +106,13 @@ impl MessageComponent {
                     .block(
                         Block::bordered()
                             .border_type(BorderType::Rounded)
-                            .border_style(Style::default().fg(if *success {
-                                Color::DarkGray
-                            } else {
+                            .border_style(Style::default().fg(if *status == ToolStatus::Failure {
                                 Color::Red
+                            } else {
+                                Color::DarkGray
                             }))
                             .title(Line::styled(
-                                format!(" {symbol} {name} {status} "),
+                                format!(" {symbol} {name} {label} "),
                                 Style::default().fg(color).add_modifier(Modifier::BOLD),
                             ))
                             .padding(Padding::horizontal(1)),
