@@ -2,7 +2,6 @@ use std::io;
 
 use crate::error::AppError;
 use crate::model_catalog::Catalog;
-use crate::tui::SlashCommand::CD;
 use crate::{
     comms::{AgentCommand, AgentEvent},
     config::provider::{
@@ -164,7 +163,7 @@ impl Tui {
                 self.slash_commands_menu.update("");
                 true
             }
-            Some(CD) => {
+            Some(SlashCommand::CD) => {
                 let error = match args.first() {
                     Some(path) => std::env::set_current_dir(path)
                         .err()
@@ -175,6 +174,12 @@ impl Tui {
                     self.messages.push(MessageComponent::Error { content });
                     self.messages.scroll_to_bottom();
                 }
+                self.prompt.clear();
+                self.slash_commands_menu.update("");
+                true
+            },
+            Some(SlashCommand::Exit) => {
+                self.should_quit = true;
                 self.prompt.clear();
                 self.slash_commands_menu.update("");
                 true
