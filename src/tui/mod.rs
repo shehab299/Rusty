@@ -177,7 +177,7 @@ impl Tui {
                 self.prompt.clear();
                 self.slash_commands_menu.update("");
                 true
-            },
+            }
             Some(SlashCommand::Exit) => {
                 self.should_quit = true;
                 self.prompt.clear();

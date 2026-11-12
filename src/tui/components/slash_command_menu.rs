@@ -13,7 +13,7 @@ pub enum SlashCommand {
     Connect,
     Models,
     CD,
-    Exit
+    Exit,
 }
 
 impl SlashCommand {
@@ -24,7 +24,7 @@ impl SlashCommand {
             Self::Connect => "/connect",
             Self::Models => "/models",
             Self::CD => "/cd",
-            Self::Exit => "/exit"
+            Self::Exit => "/exit",
         }
     }
 
@@ -33,7 +33,7 @@ impl SlashCommand {
             Self::Connect => "Connect a provider",
             Self::Models => "Select a model",
             Self::CD => "Change working directory",
-            Self::Exit => "Exit the app"
+            Self::Exit => "Exit the app",
         }
     }
 

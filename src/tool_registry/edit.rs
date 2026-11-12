@@ -39,4 +39,3 @@ pub async fn edit(path: String, old: String, new: String) -> Result<(), ToolErro
 
     Ok(())
 }
-
