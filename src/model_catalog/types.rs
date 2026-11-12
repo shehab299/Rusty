@@ -9,6 +9,10 @@ use serde::Deserialize;
 pub struct Catalog(BTreeMap<String, CatalogProvider>);
 
 impl Catalog {
+    pub fn model(&self, provider: &str, model: &str) -> Option<&CatalogModel> {
+        self.0.get(provider)?.models.get(model)
+    }
+
     /// Check whether a provider's catalog contains the given model ID.
     pub fn has_model(&self, provider: &str, model: &str) -> bool {
         self.0
@@ -37,6 +41,8 @@ pub struct CatalogModel {
     #[serde(default)]
     pub modalities: ModelModalities,
     pub cost: Option<ModelCost>,
+    #[serde(default)]
+    pub limit: ModelLimits,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -50,6 +56,13 @@ pub struct ModelModalities {
 pub struct ModelCost {
     pub input: Option<f64>,
     pub output: Option<f64>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ModelLimits {
+    #[serde(default)]
+    pub context: Option<u64>,
+    pub output: Option<u64>,
 }
 
 impl CatalogModel {

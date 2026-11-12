@@ -115,6 +115,13 @@ impl ModelPopup {
         self.error = Some(error);
     }
 
+    pub fn context_limit(&self, provider: ProviderId, model: &str) -> Option<u64> {
+        self.catalog
+            .model(&provider.to_string().to_lowercase(), model)?
+            .limit
+            .context
+    }
+
     fn filtered(&self) -> Vec<&(ProviderId, CatalogModel)> {
         let query = self.search.lines()[0].trim().to_lowercase();
         self.models

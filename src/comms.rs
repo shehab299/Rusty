@@ -28,4 +28,5 @@ pub enum AgentEvent {
         output: String,
         success: bool,
     },
+    ContextUpdate(u64),
 }

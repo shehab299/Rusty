@@ -4,7 +4,7 @@ use crate::{
     provider_manager::ModelSelection,
 };
 
-use ai_sdk::{GenerateRequest, Message, Tool, ToolCall, generate_text, providers::Provider};
+use ai_sdk::{GenerateRequest, Message, Tool, ToolCall, Usage, generate_text, providers::Provider};
 use tool::{DynTool, ToolContext, ToolDelta};
 
 use serde_json::Value;
@@ -122,6 +122,15 @@ impl Agent {
     }
 
     pub async fn run(&mut self) -> Result<(), AppError> {
+        if let Some(selection) = &self.selection {
+            self.events_sender
+                .send(AgentEvent::ModelSelected {
+                    provider: selection.provider(),
+                    model: selection.model().to_owned(),
+                })
+                .await?;
+        }
+
         let definitions: Vec<Tool> = self
             .tools
             .values()
@@ -244,7 +253,7 @@ impl Agent {
         loop {
             let request = GenerateRequest::from_messages(model.clone(), context.clone())
                 .with_tools(definitions.to_vec());
-            
+
             let request_span = tracing::info_span!(
                 "gen_ai.request",
                 gen_ai.provider.name = provider.id(),
@@ -255,7 +264,7 @@ impl Agent {
                 outcome = tracing::field::Empty,
                 otel.status_code = tracing::field::Empty,
             );
-            
+
             let response = async {
                 let mut operation = crate::telemetry::Operation::new(tracing::Span::current());
                 let result = generate_text(provider, request).await;
@@ -266,9 +275,12 @@ impl Agent {
                         span.record("gen_ai.response.model", model.as_str());
                     }
                     if let Some(usage) = &response.usage {
+                        Self::update_context(usage, events_sender).await;
+
                         if let Some(tokens) = usage.input_tokens {
                             span.record("gen_ai.usage.input_tokens", tokens);
                         }
+
                         if let Some(tokens) = usage.output_tokens {
                             span.record("gen_ai.usage.output_tokens", tokens);
                         }
@@ -302,7 +314,7 @@ impl Agent {
                 );
 
                 let mut operation = crate::telemetry::Operation::new(tool_span.clone());
-                
+
                 let result = Self::execute_tool(tools, &call, events_sender)
                     .instrument(tool_span.clone())
                     .await;
@@ -313,6 +325,24 @@ impl Agent {
 
                 context.push(result.map(|(message, _)| message)?);
             }
+        }
+    }
+
+    async fn update_context(usage: &Usage, events_sender: &Sender<AgentEvent>) {
+        let mut context = None;
+
+        if let Some(tokens) = usage.input_tokens {
+            context = Some(tokens);
+        }
+
+        if let Some(tokens) = usage.output_tokens {
+            if let Some(context) = context.as_mut() {
+                *context += tokens;
+            }
+        }
+
+        if let Some(context) = context {
+            let _ = events_sender.send(AgentEvent::ContextUpdate(context)).await;
         }
     }
 }

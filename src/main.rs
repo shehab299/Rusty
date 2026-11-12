@@ -2,10 +2,7 @@ use crate::provider_manager::ProviderManager;
 use crate::{agent::Agent, config::AppConfig, error::AppError, tool_registry::get_tools};
 
 use comms::{AgentCommand, AgentEvent};
-use tokio::{
-    sync::mpsc,
-    task::spawn_blocking
-};  
+use tokio::{sync::mpsc, task::spawn_blocking};
 use tui::Tui;
 
 mod agent;
@@ -22,7 +19,7 @@ mod tui;
 async fn main() -> Result<(), AppError> {
     let config = AppConfig::load().map_err(AppError::Config)?;
     let telemetry_config = config.opentelemetry;
-    
+
     let _telemetry = match spawn_blocking(move || telemetry::init(telemetry_config))
         .await
         .map_err(AppError::Task)?
@@ -38,7 +35,7 @@ async fn main() -> Result<(), AppError> {
     let provider_manager = ProviderManager::from_config(config.provider)?;
     let selection = config
         .model
-        .filter(|model| catalog.has_model(&model.provider.to_string(), &model.model))
+        .filter(|model| catalog.has_model(&model.provider.to_string().to_lowercase(), &model.model))
         .map(|model| provider_manager.select(model.provider, model.model))
         .transpose()?;
 

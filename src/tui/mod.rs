@@ -270,6 +270,8 @@ impl Tui {
         match event {
             AgentEvent::ModelSelected { provider, model } => {
                 self.footer
+                    .set_context_limit(self.model_popup.context_limit(provider, &model));
+                self.footer
                     .set_status(format!("Selected {provider}: {model}"));
                 self.model_popup.current = Some((provider, model));
             }
@@ -293,6 +295,7 @@ impl Tui {
                 self.messages.push(MessageComponent::Assistant { content })
             }
             AgentEvent::ToolDelta(delta) => self.messages.update_tool(delta),
+            AgentEvent::ContextUpdate(tokens) => self.footer.set_context_size(tokens),
             AgentEvent::ToolCall {
                 id,
                 name,
