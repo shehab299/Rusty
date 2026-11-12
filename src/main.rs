@@ -2,7 +2,10 @@ use crate::provider_manager::ProviderManager;
 use crate::{agent::Agent, config::AppConfig, error::AppError, tool_registry::get_tools};
 
 use comms::{AgentCommand, AgentEvent};
-use tokio::sync::mpsc;
+use tokio::{
+    sync::mpsc,
+    task::spawn_blocking
+};  
 use tui::Tui;
 
 mod agent;
@@ -11,12 +14,26 @@ mod config;
 mod error;
 mod model_catalog;
 mod provider_manager;
+mod telemetry;
 mod tool_registry;
 mod tui;
 
 #[tokio::main]
 async fn main() -> Result<(), AppError> {
     let config = AppConfig::load().map_err(AppError::Config)?;
+    let telemetry_config = config.opentelemetry;
+    
+    let _telemetry = match spawn_blocking(move || telemetry::init(telemetry_config))
+        .await
+        .map_err(AppError::Task)?
+    {
+        Ok(telemetry) => telemetry,
+        Err(error) => {
+            eprintln!("Telemetry disabled: {error}");
+            None
+        }
+    };
+
     let catalog = model_catalog::load_catalog().await?;
     let provider_manager = ProviderManager::from_config(config.provider)?;
     let selection = config

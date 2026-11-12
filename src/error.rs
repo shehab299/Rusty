@@ -18,6 +18,7 @@ pub enum AppError {
     Channel(Box<dyn Error + Send + Sync + 'static>),
     Terminal(io::Error),
     Task(JoinError),
+    Telemetry(Box<dyn Error + Send + Sync + 'static>),
 }
 
 impl fmt::Display for AppError {
@@ -33,6 +34,7 @@ impl fmt::Display for AppError {
             Self::Channel(error) => write!(f, "channel failed: {error}"),
             Self::Terminal(error) => write!(f, "terminal failed: {error}"),
             Self::Task(error) => write!(f, "task failed: {error}"),
+            Self::Telemetry(error) => write!(f, "telemetry failed: {error}"),
         }
     }
 }
@@ -50,6 +52,7 @@ impl Error for AppError {
             Self::Channel(error) => Some(error.as_ref()),
             Self::Terminal(error) => Some(error),
             Self::Task(error) => Some(error),
+            Self::Telemetry(error) => Some(error.as_ref()),
         }
     }
 }

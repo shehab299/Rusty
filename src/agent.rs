@@ -10,6 +10,7 @@ use tool::{DynTool, ToolContext, ToolDelta};
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
 use tokio::sync::mpsc::{Receiver, Sender};
+use tracing::Instrument;
 
 fn display_tool_result(value: &Value) -> Result<String, serde_json::Error> {
     match value {
@@ -58,7 +59,7 @@ impl Agent {
         tools: &HashMap<String, Box<dyn DynTool>>,
         call: &ToolCall,
         events_sender: &Sender<AgentEvent>,
-    ) -> Result<Message, AppError> {
+    ) -> Result<(Message, bool), AppError> {
         let (tool_tx, mut tool_rx) = tokio::sync::mpsc::channel::<ToolDelta>(100);
 
         events_sender
@@ -117,7 +118,7 @@ impl Agent {
             })
             .await?;
 
-        Ok(Message::tool_result(call.id.clone(), content))
+        Ok((Message::tool_result(call.id.clone(), content), success))
     }
 
     pub async fn run(&mut self) -> Result<(), AppError> {
@@ -168,6 +169,15 @@ impl Agent {
                     self.context.push(Message::user(prompt));
                     self.events_sender.send(AgentEvent::Started).await?;
 
+                    let turn_span = tracing::info_span!(
+                        parent: None,
+                        "agent.turn",
+                        gen_ai.provider.name = %selection.provider(),
+                        gen_ai.request.model = %selection.model(),
+                        outcome = tracing::field::Empty,
+                        otel.status_code = tracing::field::Empty,
+                    );
+                    let mut operation = crate::telemetry::Operation::new(turn_span.clone());
                     let outcome = {
                         let turn = Self::run_turn(
                             &mut self.context,
@@ -176,7 +186,8 @@ impl Agent {
                             selection.client(),
                             selection.model().to_owned(),
                             &definitions,
-                        );
+                        )
+                        .instrument(turn_span.clone());
                         tokio::pin!(turn);
 
                         loop {
@@ -184,13 +195,20 @@ impl Agent {
                                 biased;
                                 command = self.commands_receiver.recv() => match command {
                                     Some(AgentCommand::Cancel) => break None,
-                                    Some(AgentCommand::Shutdown) | None => return Ok(()),
+                                    Some(AgentCommand::Shutdown) | None => {
+                                        operation.shutdown();
+                                        return Ok(());
+                                    },
                                     Some(command) => pending.push_back(command),
                                 },
                                 result = &mut turn => break Some(result),
                             }
                         }
                     };
+
+                    if let Some(result) = &outcome {
+                        operation.complete(result.is_ok());
+                    }
 
                     match outcome {
                         Some(Ok(())) => self.events_sender.send(AgentEvent::Completed).await?,
@@ -226,7 +244,41 @@ impl Agent {
         loop {
             let request = GenerateRequest::from_messages(model.clone(), context.clone())
                 .with_tools(definitions.to_vec());
-            let response = generate_text(provider, request).await?;
+            
+            let request_span = tracing::info_span!(
+                "gen_ai.request",
+                gen_ai.provider.name = provider.id(),
+                gen_ai.request.model = %model,
+                gen_ai.response.model = tracing::field::Empty,
+                gen_ai.usage.input_tokens = tracing::field::Empty,
+                gen_ai.usage.output_tokens = tracing::field::Empty,
+                outcome = tracing::field::Empty,
+                otel.status_code = tracing::field::Empty,
+            );
+            
+            let response = async {
+                let mut operation = crate::telemetry::Operation::new(tracing::Span::current());
+                let result = generate_text(provider, request).await;
+                let span = tracing::Span::current();
+                operation.complete(result.is_ok());
+                if let Ok(response) = &result {
+                    if let Some(model) = &response.model {
+                        span.record("gen_ai.response.model", model.as_str());
+                    }
+                    if let Some(usage) = &response.usage {
+                        if let Some(tokens) = usage.input_tokens {
+                            span.record("gen_ai.usage.input_tokens", tokens);
+                        }
+                        if let Some(tokens) = usage.output_tokens {
+                            span.record("gen_ai.usage.output_tokens", tokens);
+                        }
+                    }
+                }
+                result
+            }
+            .instrument(request_span)
+            .await?;
+
             let calls = response.tool_calls.clone();
             let text = response.text.clone();
             context.push(response.into_message());
@@ -240,8 +292,26 @@ impl Agent {
             }
 
             for call in calls {
-                let message = Self::execute_tool(tools, &call, events_sender).await?;
-                context.push(message);
+                let tool_span = tracing::info_span!(
+                    "tool.execute",
+                    tool.name = %call.name,
+                    tool.call.id = %call.id,
+                    tool.success = tracing::field::Empty,
+                    outcome = tracing::field::Empty,
+                    otel.status_code = tracing::field::Empty
+                );
+
+                let mut operation = crate::telemetry::Operation::new(tool_span.clone());
+                
+                let result = Self::execute_tool(tools, &call, events_sender)
+                    .instrument(tool_span.clone())
+                    .await;
+
+                let success = result.as_ref().is_ok_and(|(_, success)| *success);
+                tool_span.record("tool.success", success);
+                operation.complete(success);
+
+                context.push(result.map(|(message, _)| message)?);
             }
         }
     }

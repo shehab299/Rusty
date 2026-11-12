@@ -1,15 +1,21 @@
-//! Provider settings loaded from TOML and environment variables.
+//! Application settings loaded from TOML and environment variables.
 
+use crate::config::{
+    opentelemetry::OpenTelemetryConfig,
+    provider::{ProviderId, ProvidersConfig},
+};
 use config::{Config, ConfigError, Environment, File};
-use provider::{ProviderId, ProvidersConfig};
 use serde::Deserialize;
 use std::path::Path;
 
 pub mod home;
+pub mod opentelemetry;
 pub mod provider;
 
 #[derive(Clone, Default, Deserialize)]
 pub struct AppConfig {
+    #[serde(default)]
+    pub opentelemetry: OpenTelemetryConfig,
     #[serde(default)]
     pub provider: ProvidersConfig,
     pub model: Option<ModelConfig>,
