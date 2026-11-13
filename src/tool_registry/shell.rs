@@ -70,16 +70,22 @@ pub async fn shell(
 
             _ = &mut deadline => {
 
-                context.emit("Command timed out!\n").await?;
-
                 if exit_status.is_none() {
                     child.kill().await?;
                 }
 
-                break;
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("Command timed out after {timeout} seconds"),
+                ).into());
             }
         };
     }
 
-    Ok("".to_string())
+    let status = exit_status.ok_or_else(|| std::io::Error::other("missing command exit status"))?;
+    if !status.success() {
+        return Err(std::io::Error::other(format!("Command failed with {status}")).into());
+    }
+
+    Ok(String::new())
 }

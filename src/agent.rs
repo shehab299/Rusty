@@ -61,6 +61,7 @@ impl Agent {
         events_sender: &Sender<AgentEvent>,
     ) -> Result<(Message, bool), AppError> {
         let (tool_tx, mut tool_rx) = tokio::sync::mpsc::channel::<ToolDelta>(100);
+        let mut streamed_output = String::new();
 
         events_sender
             .send(AgentEvent::ToolCall {
@@ -86,6 +87,7 @@ impl Agent {
                     tokio::select! {
                         biased;
                         Some(delta) = tool_rx.recv() => {
+                            streamed_output.push_str(&delta.content);
                             events_sender.send(AgentEvent::ToolDelta(delta)).await?;
                         }
                         result = &mut execution => break result,
@@ -94,6 +96,7 @@ impl Agent {
             };
 
             while let Ok(delta) = tool_rx.try_recv() {
+                streamed_output.push_str(&delta.content);
                 events_sender.send(AgentEvent::ToolDelta(delta)).await?;
             }
 
@@ -101,13 +104,25 @@ impl Agent {
         }
         .await;
 
-        let (output, content, success) = match result {
+        let (output, mut content, success) = match result {
             Ok(value) => (display_tool_result(&value)?, value.to_string(), true),
             Err(error) => {
                 let output = error.to_string();
                 (output.clone(), output, false)
             }
         };
+
+        if !streamed_output.is_empty() {
+            if output.is_empty() {
+                content = streamed_output;
+            } else {
+                if !streamed_output.ends_with('\n') {
+                    streamed_output.push('\n');
+                }
+                streamed_output.push_str(&content);
+                content = streamed_output;
+            }
+        }
 
         events_sender
             .send(AgentEvent::ToolResult {
