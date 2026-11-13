@@ -14,7 +14,13 @@ use components::{
     PromptComponent, ProviderPopup, ProviderPopupAction, Render, SlashCommand, SlashCommandMenu,
     SlashCommandMenuAction,
 };
-use crossterm::event::{Event as TerminalEvent, EventStream, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::{
+    event::{
+        EnableBracketedPaste, Event as TerminalEvent, EventStream, KeyCode, KeyEventKind,
+        KeyModifiers, DisableBracketedPaste
+    },
+    execute,
+};
 use futures_util::StreamExt;
 use ratatui::{
     Frame,
@@ -211,10 +217,16 @@ impl Tui {
     // Event Handling
 
     async fn handle_terminal_event(&mut self, event: TerminalEvent) {
-        let TerminalEvent::Key(key) = event else {
-            return;
-        };
 
+        let key = match event {
+            TerminalEvent::Key(k) => k,
+            TerminalEvent::Paste(s) => { 
+                self.prompt.insert_text(&s);
+                return;
+            }
+            _ => return
+        };
+        
         if key.kind == KeyEventKind::Release {
             return;
         }
@@ -338,6 +350,7 @@ impl Tui {
 
     pub async fn run(&mut self) -> io::Result<()> {
         let mut terminal = ratatui::init();
+        execute!(std::io::stdout(), EnableBracketedPaste)?;
         self.terminal_active = true;
         let mut terminal_events = EventStream::new();
 
@@ -366,6 +379,7 @@ impl Tui {
 impl Drop for Tui {
     fn drop(&mut self) {
         if self.terminal_active {
+            let _ = execute!(std::io::stdout(), DisableBracketedPaste);
             ratatui::restore();
         }
     }
@@ -378,7 +392,7 @@ impl Render for Tui {
             .constraints([
                 Constraint::Fill(1),
                 Constraint::Length(self.slash_commands_menu.height()),
-                Constraint::Length(self.prompt.height(f.area().height)),
+                Constraint::Length(self.prompt.height(f.area().width, f.area().height)),
                 Constraint::Length(1),
             ]);
 

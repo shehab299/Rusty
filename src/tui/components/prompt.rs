@@ -2,8 +2,9 @@ use crate::tui::components::Render;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::widgets::{Block, Borders};
-use ratatui_textarea::{Input, Key, TextArea};
+use ratatui::text::{Line, Text};
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui_textarea::{Input, Key, TextArea, WrapMode};
 
 pub struct PromptComponent {
     prompt: TextArea<'static>,
@@ -15,6 +16,7 @@ pub struct PromptComponent {
 impl PromptComponent {
     pub fn new() -> Self {
         let mut prompt = TextArea::default();
+        prompt.set_wrap_mode(WrapMode::WordOrGlyph);
         prompt.set_block(Block::default().borders(Borders::ALL));
         prompt.set_placeholder_text("Ask me anything..");
         prompt.set_cursor_style(
@@ -37,16 +39,49 @@ impl PromptComponent {
         self.prompt.lines().join("\n")
     }
 
-    pub fn height(&self, available_height: u16) -> u16 {
-        self.prompt
+    pub fn height(&self, available_width: u16, available_height: u16) -> u16 {
+        // Measure soft-wrapped rows inside the border, not just explicit newlines.
+        let lines: Vec<Line<'_>> = self
+            .prompt
             .lines()
-            .len()
+            .iter()
+            .map(|line| Line::from(line.as_str()))
+            .collect();
+        Paragraph::new(Text::from(lines))
+            .wrap(Wrap { trim: false })
+            .line_count(available_width.saturating_sub(2).max(1))
             .saturating_add(2)
             .clamp(3, usize::from(available_height.max(3) / 2 + 2)) as u16
     }
 
     pub fn insert_newline(&mut self) {
         self.prompt.insert_newline();
+    }
+
+    pub fn insert_text(&mut self, text: &str) {
+        let mut line = String::new();
+        let mut chars = text.chars().peekable();
+
+        while let Some(ch) = chars.next() {
+            match ch {
+                '\n' => {
+                    self.prompt.insert_str(&line);
+                    line.clear();
+                    self.prompt.insert_newline();
+                }
+                '\r' => {
+                    self.prompt.insert_str(&line);
+                    line.clear();
+                    if chars.peek() == Some(&'\n') {
+                        chars.next();
+                    }
+                    self.prompt.insert_newline();
+                }
+                _ => line.push(ch),
+            }
+        }
+
+        self.prompt.insert_str(&line);
     }
 
     pub fn clear(&mut self) {
@@ -123,5 +158,29 @@ impl PromptComponent {
 impl Render for PromptComponent {
     fn render(&self, f: &mut Frame, area: Rect) {
         f.render_widget(&self.prompt, area);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn height_grows_with_wrapped_rows_and_resizes() {
+        let mut prompt = PromptComponent::new();
+        assert_eq!(prompt.height(12, 40), 3);
+        prompt.insert_text("abcdefghijabcdefghijabcde");
+        assert_eq!(prompt.height(12, 40), 5);
+        assert_eq!(prompt.height(32, 40), 3);
+        assert_eq!(prompt.content(), "abcdefghijabcdefghijabcde");
+    }
+
+    #[test]
+    fn height_preserves_newlines_and_stays_capped() {
+        let mut prompt = PromptComponent::new();
+        prompt.insert_text("first\nsecond\n");
+        assert_eq!(prompt.height(20, 40), 5);
+        prompt.insert_text(&"x".repeat(1000));
+        assert_eq!(prompt.height(12, 20), 12);
     }
 }
