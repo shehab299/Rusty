@@ -84,7 +84,7 @@ impl Tui {
         Ok(())
     }
 
-    fn handle_slash_command_menu_action(&mut self, action: SlashCommandMenuAction) -> bool {
+    async fn handle_slash_command_menu_action(&mut self, action: SlashCommandMenuAction) -> bool {
         match action {
             SlashCommandMenuAction::Ignored => false,
             SlashCommandMenuAction::Consumed => true,
@@ -94,7 +94,7 @@ impl Tui {
                 true
             }
             SlashCommandMenuAction::Execute(command) => {
-                self.handle_slash_commands(command.name());
+                self.handle_slash_commands(command.name()).await;
                 true
             }
         }
@@ -142,7 +142,7 @@ impl Tui {
         }
     }
 
-    fn handle_slash_commands(&mut self, command: impl Into<String>) -> bool {
+    async fn handle_slash_commands(&mut self, command: impl Into<String>) -> bool {
         let command = command.into();
         if !command.starts_with('/') {
             return false;
@@ -184,13 +184,33 @@ impl Tui {
                 self.slash_commands_menu.update("");
                 true
             }
+            Some(SlashCommand::Clear) => {
+                self.prompt.clear();
+                self.slash_commands_menu.update("");
+                let result = self
+                    .commands_tx
+                    .send(AgentCommand::Reset)
+                    .await
+                    .map_err(|_| "Failed to clear the session".to_string());
+
+                if let Err(e) = result {
+                    self.messages.push(MessageComponent::Error {
+                        content: e.to_string(),
+                    });
+                    self.messages.scroll_to_bottom();
+                } else {
+                    self.footer.set_context_size(0);
+                }
+
+                true
+            }
             _ => false,
         }
     }
 
     // Event Handling
 
-    fn handle_terminal_event(&mut self, event: TerminalEvent) {
+    async fn handle_terminal_event(&mut self, event: TerminalEvent) {
         let TerminalEvent::Key(key) = event else {
             return;
         };
@@ -217,7 +237,7 @@ impl Tui {
         }
 
         let action = self.slash_commands_menu.handle_key(key);
-        if self.handle_slash_command_menu_action(action) {
+        if self.handle_slash_command_menu_action(action).await {
             return;
         }
 
@@ -235,7 +255,7 @@ impl Tui {
             (KeyCode::Enter, KeyModifiers::NONE) => {
                 let content = self.prompt.content();
 
-                if self.handle_slash_commands(content.trim()) {
+                if self.handle_slash_commands(content.trim()).await {
                     return;
                 }
 
@@ -296,6 +316,12 @@ impl Tui {
             }
             AgentEvent::ToolDelta(delta) => self.messages.update_tool(delta),
             AgentEvent::ContextUpdate(tokens) => self.footer.set_context_size(tokens),
+            AgentEvent::Reset => {
+                self.messages.clear();
+                self.footer.set_context_size(0);
+                self.busy = false;
+                self.footer.set_default_status();
+            }
             AgentEvent::ToolCall {
                 id,
                 name,
@@ -326,7 +352,7 @@ impl Tui {
                     None => break,
                 },
                 event = terminal_events.next() => match event {
-                    Some(Ok(event)) => self.handle_terminal_event(event),
+                    Some(Ok(event)) => self.handle_terminal_event(event).await,
                     Some(Err(error)) => return Err(error),
                     None => break,
                 },

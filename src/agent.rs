@@ -187,6 +187,7 @@ impl Agent {
                         otel.status_code = tracing::field::Empty,
                     );
                     let mut operation = crate::telemetry::Operation::new(turn_span.clone());
+                    let mut reset = false;
                     let outcome = {
                         let turn = Self::run_turn(
                             &mut self.context,
@@ -198,12 +199,17 @@ impl Agent {
                         )
                         .instrument(turn_span.clone());
                         tokio::pin!(turn);
-
                         loop {
                             tokio::select! {
                                 biased;
                                 command = self.commands_receiver.recv() => match command {
                                     Some(AgentCommand::Cancel) => break None,
+                                    Some(AgentCommand::Reset) => {
+                                        operation.shutdown();
+                                        pending.clear();
+                                        reset = true;
+                                        break None;
+                                    }
                                     Some(AgentCommand::Shutdown) | None => {
                                         operation.shutdown();
                                         return Ok(());
@@ -229,13 +235,22 @@ impl Agent {
                         }
                         None => {
                             // Discard partial tool-call history so the next request is valid.
-                            self.context.truncate(context_len);
-                            self.events_sender.send(AgentEvent::Completed).await?;
+                            if reset {
+                                self.context.truncate(1);
+                                let _ = self.events_sender.send(AgentEvent::Reset).await;
+                            } else {
+                                self.context.truncate(context_len);
+                                self.events_sender.send(AgentEvent::Completed).await?;
+                            }
                         }
                     }
                 }
                 AgentCommand::Shutdown => {
                     return Ok(());
+                }
+                AgentCommand::Reset => {
+                    self.context.truncate(1);
+                    let _ = self.events_sender.send(AgentEvent::Reset).await;
                 }
                 AgentCommand::Cancel => {}
             };

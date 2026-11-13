@@ -20,6 +20,11 @@ pub struct MessagesComponent {
 }
 
 impl MessagesComponent {
+    pub fn clear(&mut self) {
+        self.messages.clear();
+        self.scroll = 0;
+    }
+
     pub fn push(&mut self, message: MessageComponent) {
         self.messages.push(message);
     }

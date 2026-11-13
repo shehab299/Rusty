@@ -5,6 +5,7 @@ pub enum AgentCommand {
     SubmitPrompt(String),
     Cancel,
     Shutdown,
+    Reset,
 }
 
 pub enum AgentEvent {
@@ -29,4 +30,5 @@ pub enum AgentEvent {
         success: bool,
     },
     ContextUpdate(u64),
+    Reset,
 }

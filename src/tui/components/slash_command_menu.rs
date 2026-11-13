@@ -14,10 +14,17 @@ pub enum SlashCommand {
     Models,
     CD,
     Exit,
+    Clear,
 }
 
 impl SlashCommand {
-    const ALL: [Self; 4] = [Self::Connect, Self::Models, Self::CD, Self::Exit];
+    const ALL: [Self; 5] = [
+        Self::Connect,
+        Self::Models,
+        Self::CD,
+        Self::Exit,
+        Self::Clear,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -25,6 +32,7 @@ impl SlashCommand {
             Self::Models => "/models",
             Self::CD => "/cd",
             Self::Exit => "/exit",
+            Self::Clear => "/clear",
         }
     }
 
@@ -34,6 +42,7 @@ impl SlashCommand {
             Self::Models => "Select a model",
             Self::CD => "Change working directory",
             Self::Exit => "Exit the app",
+            Self::Clear => "Reset the session (clear context)",
         }
     }
 
