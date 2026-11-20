@@ -17,9 +17,14 @@ const LOGO: &str = include_str!("../../../../public/logo");
 pub struct MessagesComponent {
     messages: Vec<MessageComponent>,
     scroll: u16,
+    working_directory: Option<std::path::PathBuf>,
 }
 
 impl MessagesComponent {
+    pub fn set_working_directory(&mut self, path: std::path::PathBuf) {
+        self.working_directory = Some(path);
+    }
+
     pub fn clear(&mut self) {
         self.messages.clear();
         self.scroll = 0;
@@ -128,7 +133,10 @@ impl Render for MessagesComponent {
         text.extend(Text::styled(
             format!(
                 "\n  cwd: {}\n\n",
-                std::env::current_dir().unwrap_or_default().display()
+                self.working_directory
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "—".into())
             ),
             Style::default().fg(Color::Yellow),
         ));

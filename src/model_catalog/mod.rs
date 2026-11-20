@@ -5,7 +5,7 @@ use std::{path::Path, time::Duration};
 use crate::error::AppError;
 
 mod types;
-pub use types::{Catalog, CatalogModel};
+pub use types::Catalog;
 
 pub async fn load_catalog() -> Result<Catalog, AppError> {
     let agent_root = crate::config::home::get_agent_root()?;

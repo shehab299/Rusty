@@ -65,6 +65,10 @@ impl ProviderPopup {
         self.selected
     }
 
+    pub fn set_configured_providers(&mut self, providers: Vec<ProviderId>) {
+        self.configured = providers;
+    }
+
     pub fn api_key(&self) -> String {
         self.api_key.lines().join("")
     }

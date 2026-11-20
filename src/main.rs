@@ -1,11 +1,13 @@
+use crate::app::App;
 use crate::provider_manager::ProviderManager;
 use crate::{agent::Agent, config::AppConfig, error::AppError, tool_registry::get_tools};
 
-use comms::{AgentCommand, AgentEvent};
+use comms::{AppCommand, AppEvent};
 use tokio::{sync::mpsc, task::spawn_blocking};
 use tui::Tui;
 
 mod agent;
+mod app;
 mod comms;
 mod config;
 mod error;
@@ -33,37 +35,34 @@ async fn main() -> Result<(), AppError> {
 
     let catalog = model_catalog::load_catalog().await?;
     let provider_manager = ProviderManager::from_config(config.provider)?;
-    let selection = config
-        .model
-        .filter(|model| catalog.has_model(&model.provider.to_string().to_lowercase(), &model.model))
-        .map(|model| provider_manager.select(model.provider, model.model))
-        .transpose()?;
 
-    let (commands_tx, commands_rx) = mpsc::channel::<AgentCommand>(100);
-    let (events_tx, events_rx) = mpsc::channel::<AgentEvent>(100);
+    let (commands_tx, commands_rx) = mpsc::channel::<AppCommand>(100);
+    let (events_tx, events_rx) = mpsc::channel::<AppEvent>(100);
 
-    let mut agent = Agent::new(
+    let mut app = App::new(
+        Agent::new(get_tools())?,
         include_str!("../public/prompts/system_prompt.md").into(),
-        get_tools(),
+        config.model,
+        provider_manager,
+        catalog,
         events_tx,
         commands_rx,
-        selection,
     )?;
 
-    let agent_task = tokio::spawn(async move { agent.run().await });
+    let app_task = tokio::spawn(async move { app.run().await });
 
     let terminal_result = {
-        let mut tui = Tui::new(commands_tx.clone(), events_rx, provider_manager, catalog)?;
+        let mut tui = Tui::new(commands_tx.clone(), events_rx);
         tui.run().await
     };
 
-    let _ = commands_tx.send(AgentCommand::Shutdown).await;
+    let _ = commands_tx.send(AppCommand::Shutdown).await;
 
-    let agent_result = agent_task.await.map_err(AppError::Task)?;
+    let app_result = app_task.await.map_err(AppError::Task)?;
     terminal_result.map_err(AppError::Terminal)?;
 
-    match agent_result {
-        Err(AppError::Channel(error)) if error.is::<mpsc::error::SendError<AgentEvent>>() => Ok(()),
+    match app_result {
+        Err(AppError::Channel(error)) if error.is::<mpsc::error::SendError<AppEvent>>() => Ok(()),
         result => result,
     }
 }

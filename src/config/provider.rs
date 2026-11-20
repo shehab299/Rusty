@@ -1,6 +1,6 @@
 //! Providers supported by this application, independently of the SDK's catalog.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 
 // No Debug implementations: settings may contain credentials.
@@ -57,7 +57,7 @@ impl ProviderConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderId {
     OpenAI,

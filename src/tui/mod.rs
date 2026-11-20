@@ -1,13 +1,9 @@
 use std::io;
 
 use crate::error::AppError;
-use crate::model_catalog::Catalog;
 use crate::{
-    comms::{AgentCommand, AgentEvent},
-    config::provider::{
-        AnthropicConfig, OpenAIConfig, OpenRouterConfig, ProviderConfig, ProviderId,
-    },
-    provider_manager::ProviderManager,
+    comms::{AppCommand, AppEvent},
+    config::provider::ProviderId,
 };
 use components::{
     FooterComponent, MessageComponent, MessagesComponent, ModelPopup, ModelPopupAction,
@@ -16,8 +12,8 @@ use components::{
 };
 use crossterm::{
     event::{
-        EnableBracketedPaste, Event as TerminalEvent, EventStream, KeyCode, KeyEventKind,
-        KeyModifiers, DisableBracketedPaste
+        DisableBracketedPaste, EnableBracketedPaste, Event as TerminalEvent, EventStream, KeyCode,
+        KeyEventKind, KeyModifiers,
     },
     execute,
 };
@@ -32,8 +28,8 @@ use tokio::sync::mpsc::{Receiver, Sender};
 mod components;
 
 pub struct Tui {
-    commands_tx: Sender<AgentCommand>,
-    events_rx: Receiver<AgentEvent>,
+    commands_tx: Sender<AppCommand>,
+    events_rx: Receiver<AppEvent>,
 
     messages: MessagesComponent,
     prompt: PromptComponent,
@@ -41,25 +37,19 @@ pub struct Tui {
     footer: FooterComponent,
     provider_popup: Option<ProviderPopup>,
     model_popup: ModelPopup,
+    clear_pending: bool,
+    configured_providers: Vec<ProviderId>,
+    pending_model: Option<(ProviderId, String)>,
+    pending_provider: Option<ProviderId>,
 
     busy: bool,
     should_quit: bool,
     terminal_active: bool,
-    provider_manager: ProviderManager,
 }
 
 impl Tui {
-    pub fn new(
-        commands: Sender<AgentCommand>,
-        events: Receiver<AgentEvent>,
-        provider_manager: ProviderManager,
-        catalog: Catalog,
-    ) -> Result<Self, AppError> {
-        let mut model_popup = ModelPopup::new(catalog);
-        model_popup.set_configured_providers(provider_manager.configured());
-
-        Ok(Self {
-            provider_manager,
+    pub fn new(commands: Sender<AppCommand>, events: Receiver<AppEvent>) -> Self {
+        Self {
             commands_tx: commands,
             events_rx: events,
             messages: MessagesComponent::default(),
@@ -70,23 +60,25 @@ impl Tui {
             should_quit: false,
             terminal_active: false,
             provider_popup: None,
-            model_popup,
-        })
+            model_popup: ModelPopup::new(),
+            clear_pending: false,
+            configured_providers: Vec::new(),
+            pending_model: None,
+            pending_provider: None,
+        }
     }
 
     // Helpers
 
-    fn configure_provider(&mut self, config: ProviderConfig) -> Result<ProviderId, AppError> {
-        let id = self.provider_manager.configure(config)?;
-        self.model_popup
-            .set_configured_providers(self.provider_manager.configured());
-        Ok(id)
-    }
-
-    fn set_model(&self, provider: ProviderId, model: String) -> Result<(), AppError> {
-        let selection = self.provider_manager.select(provider, model)?;
-        self.commands_tx
-            .try_send(AgentCommand::SetModel(selection))?;
+    fn set_model(&mut self, provider: ProviderId, model: String) -> Result<(), AppError> {
+        if self.pending_model.is_some() {
+            return Ok(());
+        }
+        self.commands_tx.try_send(AppCommand::SetModel {
+            provider,
+            model: model.clone(),
+        })?;
+        self.pending_model = Some((provider, model));
         Ok(())
     }
 
@@ -110,10 +102,10 @@ impl Tui {
         match action {
             ModelPopupAction::None => {}
             ModelPopupAction::Connect => {
-                self.provider_popup = Some(ProviderPopup::new(self.provider_manager.configured()));
+                self.provider_popup = Some(ProviderPopup::new(self.configured_providers.clone()));
             }
             ModelPopupAction::Select { provider, model } => match self.set_model(provider, model) {
-                Ok(()) => self.model_popup.visible = false,
+                Ok(()) => self.model_popup.set_error("Selecting model…".into()),
                 Err(error) => self.model_popup.set_error(error.to_string()),
             },
         }
@@ -128,22 +120,23 @@ impl Tui {
             ProviderPopupAction::None => self.provider_popup = Some(popup),
             ProviderPopupAction::Close => {}
             ProviderPopupAction::Configure { provider, api_key } => {
-                let config = match provider {
-                    ProviderId::OpenAI => ProviderConfig::OpenAI(OpenAIConfig { api_key }),
-                    ProviderId::OpenRouter => {
-                        ProviderConfig::OpenRouter(OpenRouterConfig { api_key })
-                    }
-                    ProviderId::Anthropic => ProviderConfig::Anthropic(AnthropicConfig { api_key }),
-                };
-                match self.configure_provider(config) {
-                    Ok(id) => {
-                        self.footer.set_status(format!("Configured {id}"));
+                if self.pending_provider.is_some() {
+                    self.provider_popup = Some(popup);
+                    return;
+                }
+                match self
+                    .commands_tx
+                    .try_send(AppCommand::ConfigureProvider { provider, api_key })
+                {
+                    Ok(()) => {
+                        self.pending_provider = Some(provider);
+                        popup.set_message("Connecting…");
                     }
                     Err(error) => {
                         popup.set_message(error.to_string());
-                        self.provider_popup = Some(popup);
                     }
                 }
+                self.provider_popup = Some(popup);
             }
         }
     }
@@ -158,7 +151,7 @@ impl Tui {
 
         match slash_command {
             Some(SlashCommand::Connect) => {
-                self.provider_popup = Some(ProviderPopup::new(self.provider_manager.configured()));
+                self.provider_popup = Some(ProviderPopup::new(self.configured_providers.clone()));
                 self.prompt.clear();
                 self.slash_commands_menu.update("");
                 true
@@ -171,9 +164,11 @@ impl Tui {
             }
             Some(SlashCommand::CD) => {
                 let error = match args.first() {
-                    Some(path) => std::env::set_current_dir(path)
+                    Some(path) => self
+                        .commands_tx
+                        .try_send(AppCommand::SetDirectory((*path).into()))
                         .err()
-                        .map(|error| format!("Failed to change directory to {path}: {error}")),
+                        .map(|error| error.to_string()),
                     None => Some("Usage: /cd <path>".to_string()),
                 };
                 if let Some(content) = error {
@@ -195,9 +190,8 @@ impl Tui {
                 self.slash_commands_menu.update("");
                 let result = self
                     .commands_tx
-                    .send(AgentCommand::Reset)
-                    .await
-                    .map_err(|_| "Failed to clear the session".to_string());
+                    .try_send(AppCommand::ClearConversation)
+                    .map_err(|_| "Failed to clear the conversation".to_string());
 
                 if let Err(e) = result {
                     self.messages.push(MessageComponent::Error {
@@ -205,7 +199,7 @@ impl Tui {
                     });
                     self.messages.scroll_to_bottom();
                 } else {
-                    self.footer.set_context_size(0);
+                    self.clear_pending = true;
                 }
 
                 true
@@ -217,16 +211,15 @@ impl Tui {
     // Event Handling
 
     async fn handle_terminal_event(&mut self, event: TerminalEvent) {
-
         let key = match event {
             TerminalEvent::Key(k) => k,
-            TerminalEvent::Paste(s) => { 
+            TerminalEvent::Paste(s) => {
                 self.prompt.insert_text(&s);
                 return;
             }
-            _ => return
+            _ => return,
         };
-        
+
         if key.kind == KeyEventKind::Release {
             return;
         }
@@ -255,7 +248,7 @@ impl Tui {
 
         match (key.code, key.modifiers) {
             (KeyCode::Esc, _) if self.busy => {
-                if let Err(error) = self.commands_tx.try_send(AgentCommand::Cancel) {
+                if let Err(error) = self.commands_tx.try_send(AppCommand::Cancel) {
                     self.footer.set_status(error.to_string());
                 }
             }
@@ -271,13 +264,13 @@ impl Tui {
                     return;
                 }
 
-                if self.busy || content.trim().is_empty() {
+                if self.busy || self.clear_pending || content.trim().is_empty() {
                     return;
                 }
 
                 match self
                     .commands_tx
-                    .try_send(AgentCommand::SubmitPrompt(content.to_string()))
+                    .try_send(AppCommand::SubmitPrompt(content.to_string()))
                 {
                     Ok(()) => {
                         self.messages.push(MessageComponent::User {
@@ -298,48 +291,107 @@ impl Tui {
         self.slash_commands_menu.update(&self.prompt.content());
     }
 
-    fn handle_agent_event(&mut self, event: AgentEvent) {
+    fn handle_app_event(&mut self, event: AppEvent) {
         match event {
-            AgentEvent::ModelSelected { provider, model } => {
-                self.footer
-                    .set_context_limit(self.model_popup.context_limit(provider, &model));
+            AppEvent::Notice(message) => {
+                self.footer.set_status(message.clone());
+                self.messages
+                    .push(MessageComponent::Error { content: message });
+                self.messages.scroll_to_bottom();
+            }
+            AppEvent::ConversationCleared => {
+                self.clear_pending = false;
+                self.messages.clear();
+                self.busy = false;
+                self.footer.set_context_size(0);
+                self.footer.set_default_status();
+            }
+            AppEvent::ModelSelected {
+                provider,
+                model,
+                context_limit,
+            } => {
+                self.footer.set_context_limit(context_limit);
                 self.footer
                     .set_status(format!("Selected {provider}: {model}"));
+                if self
+                    .pending_model
+                    .as_ref()
+                    .is_some_and(|(id, name)| *id == provider && name == &model)
+                {
+                    self.model_popup.visible = false;
+                    self.pending_model = None;
+                }
                 self.model_popup.current = Some((provider, model));
             }
-            AgentEvent::Started => {
+            AppEvent::ModelSelectionFailed { error } => {
+                self.pending_model = None;
+                self.footer.set_status(error.clone());
+                self.model_popup.set_error(error);
+            }
+            AppEvent::ProvidersUpdated { configured, models } => {
+                self.configured_providers = configured.clone();
+                self.model_popup
+                    .set_configured_providers(configured.clone());
+                self.model_popup.set_models(models);
+                if let Some(popup) = &mut self.provider_popup {
+                    popup.set_configured_providers(configured);
+                }
+            }
+            AppEvent::ProviderConfigured { provider } => {
+                if self.pending_provider == Some(provider) {
+                    self.pending_provider = None;
+                    if self
+                        .provider_popup
+                        .as_ref()
+                        .is_some_and(|popup| popup.selected_provider() == provider)
+                    {
+                        self.provider_popup = None;
+                    }
+                }
+                self.footer.set_status(format!("Configured {provider}"));
+            }
+            AppEvent::ProviderConfigurationFailed { provider, error } => {
+                if self.pending_provider == Some(provider) {
+                    self.pending_provider = None;
+                }
+                self.footer.set_status(error.clone());
+                if let Some(popup) = &mut self.provider_popup
+                    && popup.selected_provider() == provider
+                {
+                    popup.set_message(error);
+                }
+            }
+            AppEvent::DirectoryChanged(path) => {
+                self.messages.set_working_directory(path);
+            }
+            AppEvent::Started => {
                 self.busy = true;
                 self.footer.set_busy_status();
             }
-            AgentEvent::Completed => {
+            AppEvent::Completed => {
                 self.messages.fail_running_tools("Cancelled.");
                 self.busy = false;
                 self.footer.set_default_status();
             }
-            AgentEvent::Failed(error) => {
+            AppEvent::Failed(error) => {
                 self.busy = false;
                 self.footer.set_status(error.clone());
                 self.messages.fail_running_tools(&error);
                 self.messages
                     .push(MessageComponent::Error { content: error });
             }
-            AgentEvent::TextDelta(content) => {
+            AppEvent::TextDelta(content) => {
                 self.messages.push(MessageComponent::Assistant { content })
             }
-            AgentEvent::ToolDelta(delta) => self.messages.update_tool(delta),
-            AgentEvent::ContextUpdate(tokens) => self.footer.set_context_size(tokens),
-            AgentEvent::Reset => {
-                self.messages.clear();
-                self.footer.set_context_size(0);
-                self.busy = false;
-                self.footer.set_default_status();
-            }
-            AgentEvent::ToolCall {
+            AppEvent::ToolDelta(delta) => self.messages.update_tool(delta),
+            AppEvent::ContextUpdate(tokens) => self.footer.set_context_size(tokens),
+            AppEvent::ToolCall {
                 id,
                 name,
                 arguments,
             } => self.messages.start_tool(id, name, arguments),
-            AgentEvent::ToolResult {
+            AppEvent::ToolResult {
                 id,
                 name,
                 output,
@@ -361,7 +413,7 @@ impl Tui {
 
             tokio::select! {
                 event = self.events_rx.recv() => match event {
-                    Some(event) => self.handle_agent_event(event),
+                    Some(event) => self.handle_app_event(event),
                     None => break,
                 },
                 event = terminal_events.next() => match event {
@@ -408,3 +460,6 @@ impl Render for Tui {
         self.model_popup.render(f, f.area());
     }
 }
+
+#[cfg(test)]
+mod tests;

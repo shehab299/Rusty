@@ -42,7 +42,7 @@ impl SlashCommand {
             Self::Models => "Select a model",
             Self::CD => "Change working directory",
             Self::Exit => "Exit the app",
-            Self::Clear => "Reset the session (clear context)",
+            Self::Clear => "Clear the current conversation",
         }
     }
 
