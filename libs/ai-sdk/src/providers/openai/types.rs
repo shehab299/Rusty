@@ -298,7 +298,7 @@ pub(super) struct CompletionChoice {
     logprobs: Option<Logprobs>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct OpenAIResponseDetails {
     pub created: Option<u64>,
     pub system_fingerprint: Option<String>,
@@ -307,7 +307,7 @@ pub struct OpenAIResponseDetails {
     pub usage: Option<OpenAIUsage>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpenAIUsage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
@@ -316,13 +316,13 @@ pub struct OpenAIUsage {
     pub completion_tokens_details: Option<CompletionTokenDetails>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PromptTokenDetails {
     pub cached_tokens: Option<u64>,
     pub audio_tokens: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompletionTokenDetails {
     pub reasoning_tokens: Option<u64>,
     pub audio_tokens: Option<u64>,

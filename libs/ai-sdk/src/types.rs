@@ -8,7 +8,7 @@ use crate::providers::{
     openrouter::{OpenRouterOptions, OpenRouterResponseDetails},
 };
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(clippy::large_enum_variant)]
 pub enum Message {
     System {
@@ -57,7 +57,7 @@ impl Message {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UserContent {
     Text(String),
     Parts(Vec<ContentPart>),
@@ -105,7 +105,7 @@ impl UserContent {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ContentPart {
     Text(String),
     Image(Image),
@@ -121,7 +121,7 @@ impl ContentPart {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Image {
     pub source: ImageSource,
     pub detail: Option<ImageDetail>,
@@ -222,7 +222,7 @@ impl ImageMediaType {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ImageDetail {
     Auto,
@@ -275,7 +275,7 @@ impl Tool {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolCall {
     pub id: String,
     pub name: String,
@@ -359,7 +359,7 @@ pub struct Usage {
     pub reasoning_tokens: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum ProviderDetails {
     OpenAI(OpenAIResponseDetails),
@@ -367,13 +367,13 @@ pub enum ProviderDetails {
     OpenRouter(OpenRouterResponseDetails),
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Logprobs {
     pub content: Option<Vec<TokenLogprob>>,
     pub refusal: Option<Vec<TokenLogprob>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TokenLogprob {
     pub token: String,
     pub logprob: f64,
@@ -382,7 +382,7 @@ pub struct TokenLogprob {
     pub top_logprobs: Vec<AlternativeLogprob>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AlternativeLogprob {
     pub token: String,
     pub logprob: f64,

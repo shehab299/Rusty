@@ -293,7 +293,7 @@ pub(super) struct AssistantResponse {
     details: AnthropicResponseDetails,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AnthropicResponseDetails {
     pub content: Vec<ContentBlock>,
     pub stop_sequence: Option<String>,
@@ -301,7 +301,7 @@ pub struct AnthropicResponseDetails {
     pub usage: Option<AnthropicUsage>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AnthropicUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -315,18 +315,18 @@ pub struct AnthropicUsage {
     pub speed: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CacheCreationUsage {
     pub ephemeral_5m_input_tokens: u64,
     pub ephemeral_1h_input_tokens: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OutputTokenDetails {
     pub thinking_tokens: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServerToolUsage {
     pub web_search_requests: Option<u64>,
     pub web_fetch_requests: Option<u64>,
@@ -353,7 +353,7 @@ impl From<&AnthropicUsage> for Usage {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StopDetails {
     Refusal {

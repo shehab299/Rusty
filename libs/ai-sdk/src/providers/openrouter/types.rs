@@ -364,7 +364,7 @@ pub(super) struct CompletionChoice {
     native_finish_reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct OpenRouterResponseDetails {
     pub created: Option<u64>,
     pub provider: Option<String>,
@@ -400,7 +400,7 @@ pub struct ReasoningDetail {
     pub extra: BTreeMap<String, Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OpenRouterUsage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
@@ -412,7 +412,7 @@ pub struct OpenRouterUsage {
     pub cost_details: Option<CostDetails>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PromptTokenDetails {
     pub cached_tokens: Option<u64>,
     pub cache_write_tokens: Option<u64>,
@@ -420,7 +420,7 @@ pub struct PromptTokenDetails {
     pub video_tokens: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompletionTokenDetails {
     pub reasoning_tokens: Option<u64>,
     pub audio_tokens: Option<u64>,
@@ -429,7 +429,7 @@ pub struct CompletionTokenDetails {
     pub rejected_prediction_tokens: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CostDetails {
     pub upstream_inference_cost: Option<f64>,
     pub upstream_inference_prompt_cost: Option<f64>,
