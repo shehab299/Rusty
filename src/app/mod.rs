@@ -171,7 +171,7 @@ impl App {
     ) -> Result<bool, AppError> {
         let mut shutdown = false;
         let mut clear = false;
-        let (turn_events_tx, mut turn_events_rx) = mpsc::channel(100);
+        let (agent_events_tx, mut agent_events_rx) = mpsc::channel(100);
 
         let Some(selection) = self.selection.as_ref() else {
             self.events
@@ -198,7 +198,7 @@ impl App {
 
             let turn = self
                 .agent
-                .run_turn(&mut self.context, selection, &turn_events_tx)
+                .run_turn(&mut self.context, selection, &agent_events_tx)
                 .instrument(turn_span);
             tokio::pin!(turn);
 
@@ -226,7 +226,7 @@ impl App {
                         }
                         Some(command) => pending.push_back(command),
                     },
-                    Some(event) = turn_events_rx.recv() => {
+                    Some(event) = agent_events_rx.recv() => {
                         self.events.send(event.into()).await?;
                     },
                     result = &mut turn => break Some(result),
@@ -245,7 +245,7 @@ impl App {
         }
 
 
-        while let Ok(event) = turn_events_rx.try_recv() {
+        while let Ok(event) = agent_events_rx.try_recv() {
             self.events.send(event.into()).await?;
         }
 

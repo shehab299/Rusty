@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 
 #[derive(Clone, Debug)]
-pub enum TurnEvent {
+pub enum AgentEvent {
     TextDelta(String),
     ToolCall {
         id: String,
@@ -86,11 +86,11 @@ pub enum AppEvent {
     Notice(String),
 }
 
-impl From<TurnEvent> for AppEvent {
-    fn from(event: TurnEvent) -> Self {
+impl From<AgentEvent> for AppEvent {
+    fn from(event: AgentEvent) -> Self {
         match event {
-            TurnEvent::TextDelta(content) => Self::TextDelta(content),
-            TurnEvent::ToolCall {
+            AgentEvent::TextDelta(content) => Self::TextDelta(content),
+            AgentEvent::ToolCall {
                 id,
                 name,
                 arguments,
@@ -99,8 +99,8 @@ impl From<TurnEvent> for AppEvent {
                 name,
                 arguments,
             },
-            TurnEvent::ToolDelta(delta) => Self::ToolDelta(delta),
-            TurnEvent::ToolResult {
+            AgentEvent::ToolDelta(delta) => Self::ToolDelta(delta),
+            AgentEvent::ToolResult {
                 id,
                 name,
                 output,
@@ -111,7 +111,7 @@ impl From<TurnEvent> for AppEvent {
                 output,
                 success,
             },
-            TurnEvent::ContextUpdate(tokens) => Self::ContextUpdate(tokens),
+            AgentEvent::ContextUpdate(tokens) => Self::ContextUpdate(tokens),
         }
     }
 }

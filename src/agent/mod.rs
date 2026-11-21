@@ -7,7 +7,7 @@ use tokio::sync::mpsc::{self, Sender};
 use tool::{DynTool, ToolContext, ToolDelta};
 use tracing::Instrument;
 
-use crate::{comms::TurnEvent, error::AppError, provider_manager::ModelSelection};
+use crate::{comms::AgentEvent, error::AppError, provider_manager::ModelSelection};
 
 pub struct Agent {
     tools: HashMap<String, Box<dyn DynTool>>,
@@ -43,7 +43,7 @@ impl Agent {
         &self,
         context: &mut Vec<Message>,
         selection: &ModelSelection,
-        events: &Sender<TurnEvent>,
+        events: &Sender<AgentEvent>,
     ) -> Result<(), AppError> {
         let provider = selection.client();
         let model = selection.model().to_owned();
@@ -106,7 +106,7 @@ impl Agent {
                 Self::update_context(usage, events).await?;
             }
             if !text.is_empty() {
-                events.send(TurnEvent::TextDelta(text)).await?;
+                events.send(AgentEvent::TextDelta(text)).await?;
             }
 
             if calls.is_empty() {
@@ -150,12 +150,12 @@ impl Agent {
         &self,
         call: &ToolCall,
         output: &mut String,
-        events: &Sender<TurnEvent>,
+        events: &Sender<AgentEvent>,
     ) -> Result<bool, AppError> {
         let (tool_tx, tool_rx) = mpsc::channel::<ToolDelta>(100);
 
         events
-            .send(TurnEvent::ToolCall {
+            .send(AgentEvent::ToolCall {
                 id: call.id.clone(),
                 name: call.name.clone(),
                 arguments: call.arguments.clone(),
@@ -186,7 +186,7 @@ impl Agent {
                             biased;
                             Some(delta) = progress.receiver.recv() => {
                                 progress.output.push_str(&delta.content);
-                                events.send(TurnEvent::ToolDelta(delta)).await?;
+                                events.send(AgentEvent::ToolDelta(delta)).await?;
                             }
                             result = &mut execution => break result,
                         }
@@ -198,7 +198,7 @@ impl Agent {
 
         while let Ok(delta) = progress.receiver.try_recv() {
             progress.output.push_str(&delta.content);
-            events.send(TurnEvent::ToolDelta(delta)).await?;
+            events.send(AgentEvent::ToolDelta(delta)).await?;
         }
 
         let (display_output, final_content, success) = match result {
@@ -219,7 +219,7 @@ impl Agent {
         // Record the completed result before sending its display event.
         progress.completed = true;
         events
-            .send(TurnEvent::ToolResult {
+            .send(AgentEvent::ToolResult {
                 id: call.id.clone(),
                 name: call.name.clone(),
                 output: display_output,
@@ -230,10 +230,10 @@ impl Agent {
         Ok(success)
     }
 
-    async fn update_context(usage: &Usage, events: &Sender<TurnEvent>) -> Result<(), AppError> {
+    async fn update_context(usage: &Usage, events: &Sender<AgentEvent>) -> Result<(), AppError> {
         if let Some(input) = usage.input_tokens {
             events
-                .send(TurnEvent::ContextUpdate(
+                .send(AgentEvent::ContextUpdate(
                     input + usage.output_tokens.unwrap_or(0),
                 ))
                 .await?;

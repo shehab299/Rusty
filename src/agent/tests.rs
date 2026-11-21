@@ -1,5 +1,5 @@
 use super::*;
-use crate::comms::TurnEvent;
+use crate::comms::AgentEvent;
 use crate::config::provider::ProviderId;
 use ai_sdk::{
     GenerateResponse,
@@ -137,17 +137,17 @@ async fn executes_with_supplied_context_and_sends_events_in_order() {
     assert_eq!(executions.load(Ordering::SeqCst), 1);
     assert!(matches!(
         receiver.try_recv().unwrap(),
-        TurnEvent::ToolCall { .. }
+        AgentEvent::ToolCall { .. }
     ));
     assert!(matches!(
         receiver.try_recv().unwrap(),
-        TurnEvent::ToolDelta(_)
+        AgentEvent::ToolDelta(_)
     ));
     assert!(matches!(
         receiver.try_recv().unwrap(),
-        TurnEvent::ToolResult { success: true, .. }
+        AgentEvent::ToolResult { success: true, .. }
     ));
-    assert!(matches!(receiver.try_recv().unwrap(), TurnEvent::TextDelta(text) if text == "done"));
+    assert!(matches!(receiver.try_recv().unwrap(), AgentEvent::TextDelta(text) if text == "done"));
 }
 
 #[tokio::test]
@@ -186,7 +186,7 @@ async fn full_event_channel_delays_tool_start() {
     let executions = Arc::new(AtomicUsize::new(0));
     let agent = Agent::new(vec![Box::new(RecordingTool(executions.clone()))]).unwrap();
     let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-    sender.send(TurnEvent::ContextUpdate(0)).await.unwrap();
+    sender.send(AgentEvent::ContextUpdate(0)).await.unwrap();
     let selection = selection();
     let mut context = context();
     let turn = agent.run_turn(&mut context, &selection, &sender);

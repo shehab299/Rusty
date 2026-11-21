@@ -4,7 +4,7 @@ use config::ConfigError;
 use tokio::sync::mpsc::error::{SendError, TrySendError};
 use tokio::task::JoinError;
 
-use crate::comms::{AppCommand, AppEvent, TurnEvent};
+use crate::comms::{AppCommand, AppEvent, AgentEvent};
 
 #[derive(Debug)]
 pub enum AppError {
@@ -87,8 +87,8 @@ impl From<SendError<AppEvent>> for AppError {
     }
 }
 
-impl From<SendError<TurnEvent>> for AppError {
-    fn from(error: SendError<TurnEvent>) -> Self {
+impl From<SendError<AgentEvent>> for AppError {
+    fn from(error: SendError<AgentEvent>) -> Self {
         Self::Channel(Box::new(error))
     }
 }
