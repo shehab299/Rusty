@@ -11,7 +11,10 @@ use crate::{
     comms::{AppCommand, AppEvent, ModelOption, SessionMessage, SessionSummary},
     config::{
         ModelConfig,
-        provider::{AnthropicConfig, OpenAIConfig, OpenRouterConfig, ProviderConfig, ProviderId},
+        provider::{
+            AnthropicConfig, OpenAIConfig, OpenRouterConfig, ProviderConfig, ProviderId,
+            ProvidersConfig,
+        },
     },
     error::AppError,
     model_catalog::Catalog,
@@ -41,8 +44,8 @@ impl App {
     pub async fn new(
         agent: Agent,
         system_prompt: String,
-        model: Option<ModelConfig>,
-        provider_manager: ProviderManager,
+        model_config: Option<ModelConfig>,
+        provider_config: ProvidersConfig,
         events: Sender<AppEvent>,
         commands: Receiver<AppCommand>,
     ) -> Result<Self, AppError> {
@@ -51,7 +54,9 @@ impl App {
             Err(_) => Catalog::from_internet().await?,
         };
 
-        let selection = model
+        let provider_manager = ProviderManager::from_config(provider_config)?;
+
+        let selection = model_config
             .filter(|model| {
                 catalog.has_model(&model.provider.to_string().to_lowercase(), &model.model)
             })

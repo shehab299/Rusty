@@ -113,7 +113,7 @@ impl PromptComponent {
                 ctrl: false,
                 alt: false,
                 shift: false,
-            } if usize::from(self.prompt.cursor().0) == self.prompt.lines().len() - 1 => {
+            } if self.prompt.cursor().0 == self.prompt.lines().len() - 1 => {
                 self.next_history();
             }
             _ => {

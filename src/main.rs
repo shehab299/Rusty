@@ -1,8 +1,11 @@
-use crate::app::App;
-use crate::provider_manager::ProviderManager;
-use crate::{agent::Agent, config::AppConfig, error::AppError, tool_registry::get_tools};
-
-use comms::{AppCommand, AppEvent};
+use crate::{
+    agent::Agent,
+    app::App,
+    comms::{AppCommand, AppEvent},
+    config::AppConfig,
+    error::AppError,
+    tool_registry::get_tools,
+};
 use tokio::{sync::mpsc, task::spawn_blocking};
 use tui::Tui;
 
@@ -35,8 +38,6 @@ async fn main() -> Result<(), AppError> {
         }
     };
 
-    let provider_manager = ProviderManager::from_config(config.provider)?;
-
     let (commands_tx, commands_rx) = mpsc::channel::<AppCommand>(100);
     let (events_tx, events_rx) = mpsc::channel::<AppEvent>(100);
 
@@ -44,7 +45,7 @@ async fn main() -> Result<(), AppError> {
         Agent::new(get_tools())?,
         include_str!("../public/prompts/system_prompt.md").into(),
         config.model,
-        provider_manager,
+        config.provider,
         events_tx,
         commands_rx,
     )

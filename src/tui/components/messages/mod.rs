@@ -39,11 +39,11 @@ impl MessagesComponent {
             if let MessageComponent::ToolOutput {
                 id, output, status, ..
             } = message
+                && *id == delta.id
+                && *status == ToolStatus::Executing
             {
-                if *id == delta.id && *status == ToolStatus::Executing {
-                    output.push_str(&delta.content);
-                    return;
-                }
+                output.push_str(&delta.content);
+                return;
             }
         }
     }
@@ -74,17 +74,16 @@ impl MessagesComponent {
                 status: current_status,
                 ..
             } = message
+                && *call_id == id
             {
-                if *call_id == id {
-                    if !output.is_empty() {
-                        if !accumulated.is_empty() && !accumulated.ends_with('\n') {
-                            accumulated.push('\n');
-                        }
-                        accumulated.push_str(&output);
+                if !output.is_empty() {
+                    if !accumulated.is_empty() && !accumulated.ends_with('\n') {
+                        accumulated.push('\n');
                     }
-                    *current_status = status;
-                    return;
+                    accumulated.push_str(&output);
                 }
+                *current_status = status;
+                return;
             }
         }
         self.push(MessageComponent::ToolOutput {
@@ -97,15 +96,14 @@ impl MessagesComponent {
 
     pub fn fail_running_tools(&mut self, reason: &str) {
         for message in &mut self.messages {
-            if let MessageComponent::ToolOutput { output, status, .. } = message {
-                if *status == ToolStatus::Executing {
+            if let MessageComponent::ToolOutput { output, status, .. } = message
+                && *status == ToolStatus::Executing {
                     *status = ToolStatus::Failure;
                     if !output.is_empty() {
                         output.push('\n');
                     }
                     output.push_str(reason);
                 }
-            }
         }
     }
 

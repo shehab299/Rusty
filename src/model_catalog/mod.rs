@@ -103,6 +103,7 @@ pub struct ModelCost {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[allow(dead_code)]
 pub struct ModelLimits {
     #[serde(default)]
     pub context: Option<u64>,
