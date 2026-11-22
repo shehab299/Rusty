@@ -13,7 +13,6 @@ pub struct ProviderManager {
 }
 
 impl ProviderManager {
-    
     pub fn from_config(config: ProvidersConfig) -> Result<Self, AppError> {
         let mut manager = Self::default();
         for provider in config.into_providers() {

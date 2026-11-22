@@ -21,3 +21,9 @@ pub fn get_session_store() -> io::Result<PathBuf> {
     std::fs::create_dir_all(&session_store)?;
     Ok(session_store)
 }
+
+pub fn get_cached_model_catalog_path() -> io::Result<PathBuf> {
+    let agent_root = crate::config::home::get_agent_root()?;
+    let path = agent_root.join("cache/models.json");
+    Ok(path)
+}

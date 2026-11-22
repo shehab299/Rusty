@@ -1,4 +1,8 @@
-use crate::config::provider::ProviderId;
+use crate::{
+    config::provider::ProviderId,
+    session::{Event, SessionData},
+};
+use ai_sdk::Message;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
@@ -58,6 +62,73 @@ pub enum SessionMessage {
         success: bool,
     },
     Error(String),
+}
+
+impl From<&SessionData> for Vec<SessionMessage> {
+    fn from(data: &SessionData) -> Self {
+        let mut messages = Vec::new();
+        for event in &data.events {
+            match event {
+                Event::ConversationCleared => messages.clear(),
+                Event::PromptSubmitted { content } => {
+                    messages.push(SessionMessage::User(content.clone()))
+                }
+                Event::ModelResponded { message, .. } => {
+                    if let Message::Assistant {
+                        content,
+                        tool_calls,
+                        ..
+                    } = message.as_ref()
+                    {
+                        if !content.is_empty() {
+                            messages.push(SessionMessage::Assistant(content.clone()));
+                        }
+                        for call in tool_calls {
+                            messages.push(SessionMessage::Tool {
+                                id: call.id.clone(),
+                                name: call.name.clone(),
+                                arguments: call.arguments.clone(),
+                                output: "Not executed: turn interrupted before this tool started."
+                                    .into(),
+                                success: false,
+                            });
+                        }
+                    }
+                }
+                Event::ToolFinished {
+                    call_id,
+                    output,
+                    success,
+                    ..
+                } => set_tool(&mut messages, call_id, output, *success),
+                Event::ToolInterrupted { call_id, content } => {
+                    set_tool(&mut messages, call_id, content, false)
+                }
+                Event::ToolStarted { call_id } => set_tool(
+                    &mut messages,
+                    call_id,
+                    "Outcome unknown: inspect tool effects before continuing.",
+                    false,
+                ),
+                Event::TurnFinished {
+                    error: Some(error), ..
+                } => messages.push(SessionMessage::Error(error.clone())),
+                _ => {}
+            }
+        }
+        messages
+    }
+}
+
+fn set_tool(messages: &mut [SessionMessage], id: &str, content: &str, succeeded: bool) {
+    if let Some(SessionMessage::Tool {
+        output, success, ..
+    }) = messages.iter_mut().rev().find(
+        |message| matches!(message, SessionMessage::Tool { id: call_id, .. } if call_id == id),
+    ) {
+        *output = content.to_owned();
+        *success = succeeded;
+    }
 }
 
 #[derive(Clone, Debug)]

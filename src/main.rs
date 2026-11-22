@@ -35,7 +35,6 @@ async fn main() -> Result<(), AppError> {
         }
     };
 
-    let catalog = model_catalog::load_catalog().await?;
     let provider_manager = ProviderManager::from_config(config.provider)?;
 
     let (commands_tx, commands_rx) = mpsc::channel::<AppCommand>(100);
@@ -46,10 +45,10 @@ async fn main() -> Result<(), AppError> {
         include_str!("../public/prompts/system_prompt.md").into(),
         config.model,
         provider_manager,
-        catalog,
         events_tx,
         commands_rx,
-    )?;
+    )
+    .await?;
 
     let app_task = tokio::spawn(async move { app.run().await });
 

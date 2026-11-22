@@ -1,12 +1,14 @@
 //! In-process backend: runtime clients, model configuration, and turn execution.
-use std::collections::VecDeque;
 
-use tokio::sync::mpsc::{self, Receiver, Sender};
+use tokio::{
+    sync::mpsc::{self, Receiver, Sender},
+    time::{Duration, MissedTickBehavior, interval},
+};
 use tracing::Instrument;
 
 use crate::{
     agent::Agent,
-    comms::{AppCommand, AppEvent, ModelOption},
+    comms::{AppCommand, AppEvent, ModelOption, SessionMessage, SessionSummary},
     config::{
         ModelConfig,
         provider::{AnthropicConfig, OpenAIConfig, OpenRouterConfig, ProviderConfig, ProviderId},
@@ -17,7 +19,11 @@ use crate::{
     session::{Event, Session, TurnOutcome},
 };
 
-mod sessions;
+use std::{
+    collections::VecDeque,
+    io,
+    path::{Path, PathBuf},
+};
 
 pub struct App {
     agent: Agent,
@@ -30,20 +36,26 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(
+    // Lifecycle
+
+    pub async fn new(
         agent: Agent,
         system_prompt: String,
         model: Option<ModelConfig>,
-        providers: ProviderManager,
-        catalog: Catalog,
+        provider_manager: ProviderManager,
         events: Sender<AppEvent>,
         commands: Receiver<AppCommand>,
     ) -> Result<Self, AppError> {
+        let catalog = match Catalog::from_cached().await {
+            Ok(catalog) => catalog,
+            Err(_) => Catalog::from_internet().await?,
+        };
+
         let selection = model
             .filter(|model| {
                 catalog.has_model(&model.provider.to_string().to_lowercase(), &model.model)
             })
-            .map(|model| providers.select(model.provider, model.model))
+            .map(|model| provider_manager.select(model.provider, model.model))
             .transpose()?;
 
         let mut session = Session::create(crate::config::home::get_session_store()?)?;
@@ -74,7 +86,7 @@ impl App {
         Ok(Self {
             agent,
             selection,
-            provider_manager: providers,
+            provider_manager,
             catalog,
             events,
             commands,
@@ -83,6 +95,8 @@ impl App {
     }
 
     pub async fn run(&mut self) -> Result<(), AppError> {
+        let mut catalog_rx = Self::spawn_catalog_refresh();
+
         self.send_providers().await?;
         self.events
             .send(AppEvent::DirectoryChanged(std::env::current_dir()?))
@@ -96,9 +110,16 @@ impl App {
         loop {
             let command = match pending.pop_front() {
                 Some(command) => command,
-                None => match self.commands.recv().await {
-                    Some(command) => command,
-                    None => return Ok(()),
+                None => tokio::select! {
+                    command = self.commands.recv() => match command {
+                        Some(command) => command,
+                        None => return Ok(()),
+                    },
+                    Some(catalog) = catalog_rx.recv() => {
+                        self.catalog = catalog;
+                        self.send_providers().await?;
+                        continue;
+                    }
                 },
             };
 
@@ -175,44 +196,7 @@ impl App {
         }
     }
 
-    async fn configure_provider(
-        &mut self,
-        provider: ProviderId,
-        api_key: String,
-    ) -> Result<(), AppError> {
-        let config = match provider {
-            ProviderId::OpenAI => ProviderConfig::OpenAI(OpenAIConfig { api_key }),
-            ProviderId::OpenRouter => ProviderConfig::OpenRouter(OpenRouterConfig { api_key }),
-            ProviderId::Anthropic => ProviderConfig::Anthropic(AnthropicConfig { api_key }),
-        };
-
-        match self.provider_manager.configure(config) {
-            Ok(provider) => {
-                // Replace the selected client too when reconnecting its provider.
-                if let Some(selection) = &self.selection
-                    && selection.provider() == provider
-                {
-                    self.selection = Some(
-                        self.provider_manager
-                            .select(provider, selection.model().to_owned())?,
-                    );
-                }
-                self.send_providers().await?;
-                self.events
-                    .send(AppEvent::ProviderConfigured { provider })
-                    .await?;
-            }
-            Err(error) => {
-                self.events
-                    .send(AppEvent::ProviderConfigurationFailed {
-                        provider,
-                        error: error.to_string(),
-                    })
-                    .await?
-            }
-        }
-        Ok(())
-    }
+    // Turn execution
 
     /// Returns true when shutdown was requested during execution.
     async fn execute_prompt(
@@ -343,8 +327,70 @@ impl App {
         Ok(false)
     }
 
-    async fn notice(&self, message: String) -> Result<(), AppError> {
-        self.events.send(AppEvent::Notice(message)).await?;
+    // Providers and models
+
+    fn spawn_catalog_refresh() -> Receiver<Catalog> {
+        let (catalog_tx, catalog_rx) = mpsc::channel(1);
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = catalog_tx.closed() => {}
+                _ = async {
+                    let mut tick = interval(Duration::from_secs(5 * 60));
+                    tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+                    tick.tick().await; // The initial catalog is already loaded.
+                    loop {
+                        tick.tick().await;
+                        match Catalog::from_internet().await {
+                            Ok(catalog) => {
+                                if catalog_tx.send(catalog).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Err(error) => tracing::warn!(%error, "Failed to refresh model catalog"),
+                        }
+                    }
+                } => {}
+            }
+        });
+        catalog_rx
+    }
+
+    async fn configure_provider(
+        &mut self,
+        provider: ProviderId,
+        api_key: String,
+    ) -> Result<(), AppError> {
+        let config = match provider {
+            ProviderId::OpenAI => ProviderConfig::OpenAI(OpenAIConfig { api_key }),
+            ProviderId::OpenRouter => ProviderConfig::OpenRouter(OpenRouterConfig { api_key }),
+            ProviderId::Anthropic => ProviderConfig::Anthropic(AnthropicConfig { api_key }),
+        };
+
+        match self.provider_manager.configure(config) {
+            Ok(provider) => {
+                // Replace the selected client too when reconnecting its provider.
+                if let Some(selection) = &self.selection
+                    && selection.provider() == provider
+                {
+                    self.selection = Some(
+                        self.provider_manager
+                            .select(provider, selection.model().to_owned())?,
+                    );
+                }
+                self.send_providers().await?;
+                self.events
+                    .send(AppEvent::ProviderConfigured { provider })
+                    .await?;
+            }
+            Err(error) => {
+                self.events
+                    .send(AppEvent::ProviderConfigurationFailed {
+                        provider,
+                        error: error.to_string(),
+                    })
+                    .await?
+            }
+        }
         Ok(())
     }
 
@@ -390,6 +436,155 @@ impl App {
             .send(AppEvent::ProvidersUpdated { configured, models })
             .await?;
 
+        Ok(())
+    }
+
+    // Sessions
+
+    pub(super) fn list_sessions(&self) -> Result<Vec<SessionSummary>, AppError> {
+        let directory = self.session.log.path.parent().expect("session directory");
+        let current = &self.session.log.path;
+
+        let mut sessions = Vec::new();
+
+        for entry in std::fs::read_dir(directory)? {
+            let entry = entry?;
+            let id = entry.file_name().to_string_lossy().into_owned();
+
+            if !entry.file_type()?.is_file()
+                || !id.starts_with("session-")
+                || !id.ends_with(".jsonl")
+            {
+                continue;
+            }
+
+            let Ok(history) = crate::session::SessionData::load(entry.path()) else {
+                continue; // skip damaged session
+            };
+
+            let Some(directory) = history.state.directory else {
+                continue;
+            };
+
+            let title = history
+                .state
+                .title
+                .unwrap_or_else(|| "Empty conversation".into());
+
+            sessions.push(SessionSummary {
+                id,
+                title,
+                directory,
+                updated: history.updated,
+                current: entry.path() == *current,
+            });
+        }
+
+        sessions.sort_by(|a, b| b.updated.cmp(&a.updated).then_with(|| a.id.cmp(&b.id)));
+        Ok(sessions)
+    }
+
+    pub(super) fn resume_session(&mut self, id: &str) -> Result<AppEvent, AppError> {
+        let path = self.get_session_file(id)?;
+        let mut session = Session::open(&path).map_err(AppError::Wal)?;
+
+        if session.data.state.context.is_empty() {
+            return Err(AppError::Wal(io::Error::other("Session is empty")));
+        }
+
+        let selection = session
+            .data
+            .state
+            .model
+            .clone()
+            .map(|(provider, model)| self.provider_manager.select(provider, model))
+            .transpose()?;
+
+        let directory =
+            session.data.state.directory.clone().ok_or_else(|| {
+                AppError::Wal(io::Error::other("Session has no working directory"))
+            })?;
+
+        let previous_directory = std::env::current_dir()?;
+        std::env::set_current_dir(&directory)?;
+
+        // Recovery appends only interruption facts; it never invokes tools/models.
+        let recovered: Result<Vec<SessionMessage>, io::Error> = (|| {
+            session.recover()?;
+            Ok::<_, io::Error>(Vec::<SessionMessage>::from(&session.data))
+        })();
+
+        let messages = match recovered {
+            Ok(messages) => messages,
+            Err(error) => {
+                std::env::set_current_dir(previous_directory)?;
+                return Err(AppError::Wal(error));
+            }
+        };
+
+        let context_limit = selection.as_ref().and_then(|selection| {
+            self.catalog
+                .model(
+                    &selection.provider().to_string().to_lowercase(),
+                    selection.model(),
+                )
+                .and_then(|model| model.limit.context)
+        });
+
+        let model = session.data.state.model.clone();
+        self.selection = selection;
+        self.session = session;
+
+        Ok(AppEvent::SessionResumed {
+            context_tokens: self.session.data.state.context_tokens,
+            messages,
+            directory,
+            model,
+            context_limit,
+        })
+    }
+
+    pub(super) fn get_session_file(&self, id: &str) -> Result<PathBuf, AppError> {
+        if Path::new(id).file_name().and_then(|name| name.to_str()) != Some(id)
+            || !id.starts_with("session-")
+            || !id.ends_with(".jsonl")
+        {
+            return Err(AppError::Wal(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Invalid session ID",
+            )));
+        }
+
+        let path = self
+            .session
+            .log
+            .path
+            .parent()
+            .expect("session directory")
+            .join(id);
+
+        if path == self.session.log.path {
+            return Err(AppError::Wal(io::Error::other(
+                "This session is already active",
+            )));
+        }
+
+        // Do not create missing sessions or follow links outside the store.
+        let metadata = std::fs::symlink_metadata(&path)?;
+
+        if !metadata.is_file() {
+            return Err(AppError::Wal(io::Error::other(
+                "Session is not a regular file",
+            )));
+        }
+
+        Ok(path)
+    }
+
+    // Notifications
+
+    async fn notice(&self, message: String) -> Result<(), AppError> {
+        self.events.send(AppEvent::Notice(message)).await?;
         Ok(())
     }
 }

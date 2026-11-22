@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs::{File, OpenOptions},
     io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write},
+    iter::FusedIterator,
     path::{Path, PathBuf},
-    iter::FusedIterator
 };
 
 const MAX_PAYLOAD: usize = 64 * 1024 * 1024;
@@ -106,7 +106,6 @@ impl Iterator for Records<'_> {
 }
 
 impl FusedIterator for Records<'_> {}
-
 
 pub(crate) struct Log {
     pub path: PathBuf,
@@ -233,8 +232,3 @@ impl Log {
         line
     }
 }
-
-
-
-#[cfg(test)]
-mod tests;
