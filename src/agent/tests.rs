@@ -48,6 +48,8 @@ async fn cancellation_preserves_streamed_output_in_session_and_replay() {
     session
         .record(Event::ModelResponded {
             request_sequence,
+            cache_hit_tokens: None,
+            input_tokens: None,
             context_tokens: None,
             message: Box::new(Message::Assistant {
                 content: String::new(),

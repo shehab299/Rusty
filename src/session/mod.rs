@@ -1,10 +1,12 @@
 //! Session state and durable event history.
 
+pub use cache_usage::{CacheUsage, cache_hit_percent};
 pub use event::{Event, TurnOutcome};
 use log::Log;
 pub use state::{State, ToolStatus};
 use std::{io, path::Path};
 
+mod cache_usage;
 mod event;
 mod log;
 mod state;

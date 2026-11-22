@@ -30,6 +30,10 @@ pub enum Event {
         message: Box<Message>,
         #[serde(default)]
         context_tokens: Option<u64>,
+        #[serde(default)]
+        cache_hit_tokens: Option<u64>,
+        #[serde(default)]
+        input_tokens: Option<u64>,
     },
     ToolStarted {
         call_id: String,

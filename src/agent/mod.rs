@@ -2,7 +2,7 @@
 //! transient output still travels independently over the UI channel.
 use std::collections::HashMap;
 
-use ai_sdk::{GenerateRequest, Tool, ToolCall, Usage, generate_text};
+use ai_sdk::{GenerateRequest, Tool, ToolCall, generate_text};
 use serde_json::Value;
 use tokio::sync::mpsc::{self, Sender};
 use tool::{DynTool, ToolContext, ToolDelta};
@@ -91,7 +91,19 @@ impl Agent {
             .instrument(request_span)
             .await?;
 
-            let usage = response.usage.clone();
+            let (input_tokens, cache_hit_tokens, context_tokens) = response
+                .usage
+                .as_ref()
+                .map(|usage| {
+                    (
+                        usage.input_tokens,
+                        usage.cached_input_tokens,
+                        usage
+                            .input_tokens
+                            .map(|input| input.saturating_add(usage.output_tokens.unwrap_or(0))),
+                    )
+                })
+                .unwrap_or_default();
             let calls = response.tool_calls.clone();
 
             let text = response.text.clone();
@@ -99,22 +111,22 @@ impl Agent {
             session
                 .record(Event::ModelResponded {
                     request_sequence,
-                    context_tokens: usage.as_ref().and_then(|usage| {
-                        usage
-                            .input_tokens
-                            .map(|input| input.saturating_add(usage.output_tokens.unwrap_or(0)))
-                    }),
+                    cache_hit_tokens,
+                    input_tokens,
+                    context_tokens,
                     message: Box::new(message),
                 })
                 .map_err(AppError::Wal)?;
             // Recording the response reserves every tool result before any await.
 
-            if let Some(usage) = &usage {
-                Self::update_context(usage, events).await?;
-            }
-            if !text.is_empty() {
-                events.send(AgentEvent::TextDelta(text)).await?;
-            }
+            events
+                .send(AgentEvent::ModelResponse {
+                    content: text,
+                    input_tokens,
+                    cache_hit_tokens,
+                    context_tokens,
+                })
+                .await?;
 
             if calls.is_empty() {
                 return Ok(());
@@ -255,17 +267,6 @@ impl Agent {
             .await?;
 
         Ok(success)
-    }
-
-    async fn update_context(usage: &Usage, events: &Sender<AgentEvent>) -> Result<(), AppError> {
-        if let Some(input) = usage.input_tokens {
-            events
-                .send(AgentEvent::ContextUpdate(
-                    input.saturating_add(usage.output_tokens.unwrap_or(0)),
-                ))
-                .await?;
-        }
-        Ok(())
     }
 }
 

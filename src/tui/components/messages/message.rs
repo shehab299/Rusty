@@ -4,7 +4,7 @@ use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Modifier, Style},
-    text::Line,
+    text::{Line, Text},
     widgets::{Block, BorderType, Borders, Padding, Paragraph, Widget, Wrap},
 };
 
@@ -21,6 +21,7 @@ pub enum MessageComponent {
     },
     Assistant {
         content: String,
+        cache_hit_percent: Option<f64>,
     },
     Error {
         content: String,
@@ -60,8 +61,19 @@ impl MessageComponent {
                         .border_style(Style::default().fg(Color::Cyan))
                         .padding(Padding::new(1, 0, 0, 0)),
                 ),
-            Self::Assistant { content } => Paragraph::new(content.replace("\\n", "\n"))
-                .block(Block::default().padding(Padding::new(2, 0, 0, 0))),
+            Self::Assistant {
+                content,
+                cache_hit_percent,
+            } => {
+                let mut content = Text::from(content.replace("\\n", "\n"));
+                if let Some(percent) = cache_hit_percent {
+                    content.push_line(Line::styled(
+                        format!("[Request cache hit: {percent:.1}%]"),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+                Paragraph::new(content).block(Block::default().padding(Padding::new(2, 0, 0, 0)))
+            }
             Self::Error { content } => Paragraph::new(content.replace("\\n", "\n"))
                 .style(Style::default().fg(Color::Red))
                 .block(Block::default().padding(Padding::new(2, 0, 0, 0))),
@@ -142,5 +154,26 @@ pub fn render_message(f: &mut Frame, message: &MessageComponent, visible: Rect, 
         for x in 0..visible.width {
             f.buffer_mut()[(visible.x + x, visible.y + y)] = buffer[(x, y + offset)].clone();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cache_metadata_is_compact_and_muted() {
+        let message = MessageComponent::Assistant {
+            content: "Answer".into(),
+            cache_hit_percent: Some(50.0),
+        };
+        assert_eq!(message.height(80), 2);
+        let area = Rect::new(0, 0, 80, 2);
+        let mut buffer = Buffer::empty(area);
+        message.widget().render(area, &mut buffer);
+        assert_eq!(buffer[(2, 0)].symbol(), "A");
+        assert_eq!(buffer[(2, 0)].fg, Color::Reset);
+        assert_eq!(buffer[(2, 1)].symbol(), "[");
+        assert_eq!(buffer[(2, 1)].fg, Color::DarkGray);
     }
 }

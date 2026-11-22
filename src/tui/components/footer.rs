@@ -1,3 +1,4 @@
+use crate::session::{CacheUsage, cache_hit_percent};
 use crate::tui::components::Render;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -9,6 +10,7 @@ pub struct FooterComponent {
     status: String,
     context_size: Option<u64>,
     context_limit: Option<u64>,
+    pub(in crate::tui) cache_usage: CacheUsage,
 }
 
 impl FooterComponent {
@@ -17,6 +19,7 @@ impl FooterComponent {
             status: String::new(),
             context_size: None,
             context_limit: None,
+            cache_usage: CacheUsage::default(),
         };
         footer.set_default_status();
         footer
@@ -42,22 +45,74 @@ impl FooterComponent {
         self.status =
             "Enter: send | Alt+Enter: newline | PgUp/PgDn: scroll | Ctrl+C: quit".to_string()
     }
+    fn context_labels(&self) -> (String, String) {
+        let compact = match (self.context_size, self.context_limit) {
+            (Some(tokens), Some(limit)) => format!("Context: {tokens}/{limit}"),
+            (Some(tokens), None) => format!("Context: {tokens}"),
+            (None, Some(limit)) => format!("Context: —/{limit}"),
+            (None, None) => "Context: —".to_string(),
+        };
+        let full = match (self.context_size, self.context_limit) {
+            (Some(tokens), Some(limit)) => {
+                let percent = tokens as f64 / limit as f64 * 100.0;
+                format!("{compact} tokens ({percent:.1}%)")
+            }
+            (None, None) => compact.clone(),
+            _ => format!("{compact} tokens"),
+        };
+        (full, compact)
+    }
+
+    fn cache_label(&self) -> String {
+        if let Some(percent) = cache_hit_percent(
+            Some(self.cache_usage.input_tokens),
+            Some(self.cache_usage.cache_hit_tokens),
+        ) {
+            format!(
+                "Conversation cache hit: {percent:.1}%{}",
+                if self.cache_usage.incomplete {
+                    " (partial telemetry)"
+                } else {
+                    ""
+                }
+            )
+        } else if self.cache_usage.incomplete {
+            "Conversation cache hit: unavailable".to_string()
+        } else {
+            String::new()
+        }
+    }
+
+    fn metrics_label(&self, width: u16) -> String {
+        // Keep status and keyboard hints readable before allocating secondary metrics.
+        let status_width = self.status.chars().count();
+        let available = usize::from(width).saturating_sub(status_width + 1);
+        let (context, compact_context) = self.context_labels();
+        let cache = self.cache_label();
+        let with_cache = |label: &str| {
+            if cache.is_empty() {
+                label.to_string()
+            } else {
+                format!("{label} | {cache}")
+            }
+        };
+        [with_cache(&context), with_cache(&compact_context), context]
+            .into_iter()
+            .find(|label| label.chars().count() <= available)
+            .unwrap_or_default()
+    }
 }
 
 impl Render for FooterComponent {
     fn render(&self, f: &mut Frame, area: Rect) {
-        let context = match (self.context_size, self.context_limit) {
-            (Some(tokens), Some(limit)) => {
-                let percent = tokens as f64 / limit as f64 * 100.0;
-                format!("Context: {tokens}/{limit} tokens ({percent:.1}%)")
-            }
-            (Some(tokens), None) => format!("Context: {tokens} tokens"),
-            (None, Some(limit)) => format!("Context: —/{limit} tokens"),
-            (None, None) => "Context: —".to_string(),
-        };
+        let metrics = self.metrics_label(area.width);
         let areas = Layout::horizontal([
             Constraint::Min(0),
-            Constraint::Length(context.chars().count() as u16 + 1),
+            Constraint::Length(if metrics.is_empty() {
+                0
+            } else {
+                metrics.chars().count() as u16 + 1
+            }),
         ])
         .split(area);
         f.render_widget(
@@ -68,7 +123,7 @@ impl Render for FooterComponent {
             areas[0],
         );
         f.render_widget(
-            Paragraph::new(Line::styled(context, Style::default().fg(Color::DarkGray)))
+            Paragraph::new(Line::styled(metrics, Style::default().fg(Color::DarkGray)))
                 .right_aligned(),
             areas[1],
         );
@@ -141,10 +196,46 @@ mod tests {
     }
 
     #[test]
-    fn context_renders_on_narrow_terminals() {
+    fn narrow_footer_preserves_cancel_hint_without_cache_usage() {
         let mut footer = FooterComponent::new();
         footer.set_context_size(0);
-        assert!(render_footer(&footer, 20).contains("Context: 0 tokens"));
+        footer.set_busy_status();
+        assert!(render_footer(&footer, 40).contains("Esc: cancel"));
         render_footer(&footer, 5);
+    }
+
+    #[test]
+    fn cache_hit_percent_is_token_weighted() {
+        let mut footer = FooterComponent::new();
+        footer.cache_usage.add(Some(100), Some(25));
+        footer.cache_usage.add(Some(300), Some(150));
+        assert!(render_footer(&footer, 200).contains("Conversation cache hit: 43.8%"));
+    }
+
+    #[test]
+    fn missing_cache_telemetry_is_explicit() {
+        let mut footer = FooterComponent::new();
+        footer.cache_usage.add(Some(100), None);
+        assert!(render_footer(&footer, 220).contains("Conversation cache hit: unavailable"));
+        footer.cache_usage.add(Some(100), Some(50));
+        assert!(render_footer(&footer, 220).contains("50.0% (partial telemetry)"));
+        footer.cache_usage = CacheUsage::default();
+        assert!(!render_footer(&footer, 220).contains("cache hit"));
+    }
+
+    #[test]
+    fn narrow_footer_preserves_shortcuts_with_cache_usage() {
+        let mut footer = FooterComponent::new();
+        footer.set_context_size(12500);
+        footer.set_context_limit(Some(128000));
+        footer.cache_usage.add(Some(100), Some(50));
+        footer.set_busy_status();
+        for width in [40, 60, 80] {
+            let rendered = render_footer(&footer, width);
+            assert!(rendered.contains("Thinking… Esc: cancel | Ctrl+C: quit"));
+        }
+        footer.set_default_status();
+        assert!(render_footer(&footer, 80).contains("PgUp/PgDn: scroll | Ctrl+C: quit"));
+        assert!(render_footer(&footer, 128).contains("Conversation cache hit: 50.0%"));
     }
 }

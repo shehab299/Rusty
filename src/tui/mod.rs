@@ -4,6 +4,7 @@ use crate::error::AppError;
 use crate::{
     comms::{AppCommand, AppEvent},
     config::provider::ProviderId,
+    session::cache_hit_percent,
 };
 use components::{
     FooterComponent, MessageComponent, MessagesComponent, ModelPopup, ModelPopupAction,
@@ -333,6 +334,7 @@ impl Tui {
             }
             AppEvent::SessionResumed {
                 context_tokens,
+                cache_usage,
                 messages,
                 directory,
                 model,
@@ -345,9 +347,13 @@ impl Tui {
                         SessionMessage::User(content) => {
                             self.messages.push(MessageComponent::User { content })
                         }
-                        SessionMessage::Assistant(content) => {
-                            self.messages.push(MessageComponent::Assistant { content })
-                        }
+                        SessionMessage::Assistant {
+                            content,
+                            cache_hit_percent,
+                        } => self.messages.push(MessageComponent::Assistant {
+                            content,
+                            cache_hit_percent,
+                        }),
                         SessionMessage::Error(content) => {
                             self.messages.push(MessageComponent::Error { content })
                         }
@@ -368,6 +374,7 @@ impl Tui {
                 self.messages.scroll_to_bottom();
                 self.model_popup.current = model;
                 self.footer.set_context_size(context_tokens.unwrap_or(0));
+                self.footer.cache_usage = cache_usage;
                 self.footer.set_context_limit(context_limit);
                 self.footer
                     .set_status("Session resumed. Enter a prompt to continue.");
@@ -388,6 +395,7 @@ impl Tui {
                 self.messages.clear();
                 self.busy = false;
                 self.footer.set_context_size(0);
+                self.footer.cache_usage = Default::default();
                 self.footer.set_default_status();
             }
             AppEvent::ModelSelected {
@@ -465,11 +473,24 @@ impl Tui {
                 self.messages
                     .push(MessageComponent::Error { content: error });
             }
-            AppEvent::TextDelta(content) => {
-                self.messages.push(MessageComponent::Assistant { content })
+            AppEvent::ModelResponse {
+                content,
+                input_tokens,
+                cache_hit_tokens,
+                context_tokens,
+            } => {
+                self.footer.cache_usage.add(input_tokens, cache_hit_tokens);
+                if let Some(tokens) = context_tokens {
+                    self.footer.set_context_size(tokens);
+                }
+                if !content.is_empty() {
+                    self.messages.push(MessageComponent::Assistant {
+                        content,
+                        cache_hit_percent: cache_hit_percent(input_tokens, cache_hit_tokens),
+                    });
+                }
             }
             AppEvent::ToolDelta(delta) => self.messages.update_tool(delta),
-            AppEvent::ContextUpdate(tokens) => self.footer.set_context_size(tokens),
             AppEvent::ToolCall {
                 id,
                 name,
@@ -543,5 +564,68 @@ impl Render for Tui {
         }
         self.model_popup.render(f, f.area());
         self.session_popup.render(f, f.area());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+    use tokio::sync::mpsc;
+
+    fn tui() -> Tui {
+        let (commands, _) = mpsc::channel(10);
+        let (_, events) = mpsc::channel(10);
+        Tui::new(commands, events)
+    }
+
+    fn render(component: &impl Render) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        terminal
+            .draw(|frame| component.render(frame, frame.area()))
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .chunks(120)
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn tool_only_response_updates_usage_without_adding_a_message() {
+        let mut tui = tui();
+        let before = render(&tui.messages);
+        tui.handle_app_event(AppEvent::ModelResponse {
+            content: String::new(),
+            input_tokens: Some(100),
+            cache_hit_tokens: Some(50),
+            context_tokens: Some(125),
+        });
+        assert_eq!(render(&tui.messages), before);
+        assert_eq!(tui.footer.cache_usage.input_tokens, 100);
+        assert_eq!(tui.footer.cache_usage.cache_hit_tokens, 50);
+        assert!(render(&tui.footer).contains("Context: 125 tokens"));
+    }
+
+    #[test]
+    fn each_response_uses_its_own_cache_metadata() {
+        let mut tui = tui();
+        for (content, cached) in [("First answer", Some(25)), ("Second answer", None)] {
+            tui.handle_app_event(AppEvent::ModelResponse {
+                content: content.into(),
+                input_tokens: Some(100),
+                cache_hit_tokens: cached,
+                context_tokens: None,
+            });
+        }
+        let rendered = render(&tui.messages);
+        assert!(rendered.contains("First answer"));
+        assert!(rendered.contains("Second answer"));
+        assert!(rendered.contains("[Request cache hit: 25.0%]"));
+        assert_eq!(rendered.matches("Request cache hit:").count(), 1);
+        assert!(tui.footer.cache_usage.incomplete);
     }
 }

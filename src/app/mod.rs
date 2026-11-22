@@ -19,7 +19,7 @@ use crate::{
     error::AppError,
     model_catalog::Catalog,
     provider_manager::{ModelSelection, ProviderManager},
-    session::{Event, Session, TurnOutcome},
+    session::{CacheUsage, Event, Session, TurnOutcome},
 };
 
 use std::{
@@ -537,11 +537,13 @@ impl App {
         });
 
         let model = session.data.state.model.clone();
+        let cache_usage = CacheUsage::from(&session.data);
         self.selection = selection;
         self.session = session;
 
         Ok(AppEvent::SessionResumed {
             context_tokens: self.session.data.state.context_tokens,
+            cache_usage,
             messages,
             directory,
             model,

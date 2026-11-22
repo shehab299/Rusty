@@ -97,13 +97,14 @@ impl MessagesComponent {
     pub fn fail_running_tools(&mut self, reason: &str) {
         for message in &mut self.messages {
             if let MessageComponent::ToolOutput { output, status, .. } = message
-                && *status == ToolStatus::Executing {
-                    *status = ToolStatus::Failure;
-                    if !output.is_empty() {
-                        output.push('\n');
-                    }
-                    output.push_str(reason);
+                && *status == ToolStatus::Executing
+            {
+                *status = ToolStatus::Failure;
+                if !output.is_empty() {
+                    output.push('\n');
                 }
+                output.push_str(reason);
+            }
         }
     }
 

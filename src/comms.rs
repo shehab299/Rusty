@@ -1,13 +1,18 @@
 use crate::{
     config::provider::ProviderId,
-    session::{Event, SessionData},
+    session::{CacheUsage, Event, SessionData, cache_hit_percent},
 };
 use ai_sdk::Message;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
 pub enum AgentEvent {
-    TextDelta(String),
+    ModelResponse {
+        content: String,
+        input_tokens: Option<u64>,
+        cache_hit_tokens: Option<u64>,
+        context_tokens: Option<u64>,
+    },
     ToolCall {
         id: String,
         name: String,
@@ -20,7 +25,6 @@ pub enum AgentEvent {
         output: String,
         success: bool,
     },
-    ContextUpdate(u64),
 }
 
 pub enum AppCommand {
@@ -53,7 +57,10 @@ pub struct SessionSummary {
 #[derive(Clone, Debug)]
 pub enum SessionMessage {
     User(String),
-    Assistant(String),
+    Assistant {
+        content: String,
+        cache_hit_percent: Option<f64>,
+    },
     Tool {
         id: String,
         name: String,
@@ -73,7 +80,12 @@ impl From<&SessionData> for Vec<SessionMessage> {
                 Event::PromptSubmitted { content } => {
                     messages.push(SessionMessage::User(content.clone()))
                 }
-                Event::ModelResponded { message, .. } => {
+                Event::ModelResponded {
+                    message,
+                    input_tokens,
+                    cache_hit_tokens,
+                    ..
+                } => {
                     if let Message::Assistant {
                         content,
                         tool_calls,
@@ -81,7 +93,13 @@ impl From<&SessionData> for Vec<SessionMessage> {
                     } = message.as_ref()
                     {
                         if !content.is_empty() {
-                            messages.push(SessionMessage::Assistant(content.clone()));
+                            messages.push(SessionMessage::Assistant {
+                                content: content.clone(),
+                                cache_hit_percent: cache_hit_percent(
+                                    *input_tokens,
+                                    *cache_hit_tokens,
+                                ),
+                            });
                         }
                         for call in tool_calls {
                             messages.push(SessionMessage::Tool {
@@ -144,6 +162,7 @@ pub enum AppEvent {
     SessionFailed(String),
     SessionResumed {
         context_tokens: Option<u64>,
+        cache_usage: CacheUsage,
         messages: Vec<SessionMessage>,
         directory: PathBuf,
         model: Option<(ProviderId, String)>,
@@ -170,7 +189,12 @@ pub enum AppEvent {
     },
     DirectoryChanged(PathBuf),
     Started,
-    TextDelta(String),
+    ModelResponse {
+        content: String,
+        input_tokens: Option<u64>,
+        cache_hit_tokens: Option<u64>,
+        context_tokens: Option<u64>,
+    },
     Completed,
     Failed(String),
     ToolCall {
@@ -185,7 +209,6 @@ pub enum AppEvent {
         output: String,
         success: bool,
     },
-    ContextUpdate(u64),
     ConversationCleared,
     Notice(String),
 }
@@ -193,7 +216,17 @@ pub enum AppEvent {
 impl From<AgentEvent> for AppEvent {
     fn from(event: AgentEvent) -> Self {
         match event {
-            AgentEvent::TextDelta(content) => Self::TextDelta(content),
+            AgentEvent::ModelResponse {
+                content,
+                input_tokens,
+                cache_hit_tokens,
+                context_tokens,
+            } => Self::ModelResponse {
+                content,
+                input_tokens,
+                cache_hit_tokens,
+                context_tokens,
+            },
             AgentEvent::ToolCall {
                 id,
                 name,
@@ -215,7 +248,6 @@ impl From<AgentEvent> for AppEvent {
                 output,
                 success,
             },
-            AgentEvent::ContextUpdate(tokens) => Self::ContextUpdate(tokens),
         }
     }
 }
