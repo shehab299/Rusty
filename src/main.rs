@@ -13,9 +13,11 @@ mod config;
 mod error;
 mod model_catalog;
 mod provider_manager;
+mod session;
 mod telemetry;
 mod tool_registry;
 mod tui;
+mod utils;
 
 #[tokio::main]
 async fn main() -> Result<(), AppError> {

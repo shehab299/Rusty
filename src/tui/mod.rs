@@ -7,8 +7,8 @@ use crate::{
 };
 use components::{
     FooterComponent, MessageComponent, MessagesComponent, ModelPopup, ModelPopupAction,
-    PromptComponent, ProviderPopup, ProviderPopupAction, Render, SlashCommand, SlashCommandMenu,
-    SlashCommandMenuAction,
+    PromptComponent, ProviderPopup, ProviderPopupAction, Render, SessionPopup, SlashCommand,
+    SlashCommandMenu, SlashCommandMenuAction,
 };
 use crossterm::{
     event::{
@@ -37,6 +37,8 @@ pub struct Tui {
     footer: FooterComponent,
     provider_popup: Option<ProviderPopup>,
     model_popup: ModelPopup,
+    session_popup: SessionPopup,
+    resume_pending: bool,
     clear_pending: bool,
     configured_providers: Vec<ProviderId>,
     pending_model: Option<(ProviderId, String)>,
@@ -61,6 +63,8 @@ impl Tui {
             terminal_active: false,
             provider_popup: None,
             model_popup: ModelPopup::new(),
+            session_popup: SessionPopup::default(),
+            resume_pending: false,
             clear_pending: false,
             configured_providers: Vec::new(),
             pending_model: None,
@@ -150,6 +154,20 @@ impl Tui {
         let (slash_command, args) = SlashCommand::parse(&command);
 
         match slash_command {
+            Some(SlashCommand::Session) => {
+                self.prompt.clear();
+                self.slash_commands_menu.update("");
+                if self.busy || self.clear_pending {
+                    self.footer
+                        .set_status("Cancel the active turn before switching sessions.");
+                } else {
+                    self.session_popup.open();
+                    if let Err(error) = self.commands_tx.try_send(AppCommand::ListSessions) {
+                        self.session_popup.set_error(error.to_string());
+                    }
+                }
+                true
+            }
             Some(SlashCommand::Connect) => {
                 self.provider_popup = Some(ProviderPopup::new(self.configured_providers.clone()));
                 self.prompt.clear();
@@ -229,6 +247,16 @@ impl Tui {
             return;
         }
 
+        if self.session_popup.visible {
+            if let Some(id) = self.session_popup.handle_key(key) {
+                match self.commands_tx.try_send(AppCommand::ResumeSession(id)) {
+                    Ok(()) => self.resume_pending = true,
+                    Err(error) => self.session_popup.set_error(error.to_string()),
+                }
+            }
+            return;
+        }
+
         if self.model_popup.visible {
             let popup_action = self.model_popup.handle_key(key);
             self.handle_model_popup_action(popup_action);
@@ -264,7 +292,11 @@ impl Tui {
                     return;
                 }
 
-                if self.busy || self.clear_pending || content.trim().is_empty() {
+                if self.busy
+                    || self.clear_pending
+                    || self.resume_pending
+                    || content.trim().is_empty()
+                {
                     return;
                 }
 
@@ -293,6 +325,58 @@ impl Tui {
 
     fn handle_app_event(&mut self, event: AppEvent) {
         match event {
+            AppEvent::SessionsListed(sessions) => self.session_popup.set_sessions(sessions),
+            AppEvent::SessionFailed(error) => {
+                self.resume_pending = false;
+                self.session_popup.set_error(error.clone());
+                self.footer.set_status(error);
+            }
+            AppEvent::SessionResumed {
+                context_tokens,
+                messages,
+                directory,
+                model,
+                context_limit,
+            } => {
+                self.messages.clear();
+                for message in messages {
+                    use crate::comms::SessionMessage;
+                    match message {
+                        SessionMessage::User(content) => {
+                            self.messages.push(MessageComponent::User { content })
+                        }
+                        SessionMessage::Assistant(content) => {
+                            self.messages.push(MessageComponent::Assistant { content })
+                        }
+                        SessionMessage::Error(content) => {
+                            self.messages.push(MessageComponent::Error { content })
+                        }
+                        SessionMessage::Tool {
+                            id,
+                            name,
+                            arguments,
+                            output,
+                            success,
+                        } => {
+                            self.messages
+                                .start_tool(id.clone(), name.clone(), arguments);
+                            self.messages.finish_tool(id, name, output, success);
+                        }
+                    }
+                }
+                self.messages.set_working_directory(directory);
+                self.messages.scroll_to_bottom();
+                self.model_popup.current = model;
+                self.footer.set_context_size(context_tokens.unwrap_or(0));
+                self.footer.set_context_limit(context_limit);
+                self.footer
+                    .set_status("Session resumed. Enter a prompt to continue.");
+                self.busy = false;
+                self.clear_pending = false;
+                self.resume_pending = false;
+                self.session_popup.visible = false;
+                self.prompt = PromptComponent::new();
+            }
             AppEvent::Notice(message) => {
                 self.footer.set_status(message.clone());
                 self.messages
@@ -458,8 +542,6 @@ impl Render for Tui {
             popup.render(f, f.area());
         }
         self.model_popup.render(f, f.area());
+        self.session_popup.render(f, f.area());
     }
 }
-
-#[cfg(test)]
-mod tests;

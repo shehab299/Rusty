@@ -14,3 +14,10 @@ pub fn get_agent_root() -> io::Result<PathBuf> {
     std::fs::create_dir_all(&home)?;
     Ok(home)
 }
+
+pub fn get_session_store() -> io::Result<PathBuf> {
+    let root = get_agent_root()?;
+    let session_store = root.join("wal");
+    std::fs::create_dir_all(&session_store)?;
+    Ok(session_store)
+}

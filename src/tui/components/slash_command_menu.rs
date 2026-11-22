@@ -15,10 +15,12 @@ pub enum SlashCommand {
     CD,
     Exit,
     Clear,
+    Session,
 }
 
 impl SlashCommand {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
+        Self::Session,
         Self::Connect,
         Self::Models,
         Self::CD,
@@ -33,6 +35,7 @@ impl SlashCommand {
             Self::CD => "/cd",
             Self::Exit => "/exit",
             Self::Clear => "/clear",
+            Self::Session => "/session",
         }
     }
 
@@ -43,6 +46,7 @@ impl SlashCommand {
             Self::CD => "Change working directory",
             Self::Exit => "Exit the app",
             Self::Clear => "Clear the current conversation",
+            Self::Session => "Browse and resume saved sessions",
         }
     }
 

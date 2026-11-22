@@ -1,7 +1,6 @@
 use crate::config::provider::ProviderId;
 use std::path::PathBuf;
 
-
 #[derive(Clone, Debug)]
 pub enum AgentEvent {
     TextDelta(String),
@@ -34,6 +33,31 @@ pub enum AppCommand {
     Shutdown,
     ClearConversation,
     SetDirectory(String),
+    ListSessions,
+    ResumeSession(String),
+}
+
+#[derive(Clone, Debug)]
+pub struct SessionSummary {
+    pub id: String,
+    pub title: String,
+    pub directory: PathBuf,
+    pub updated: u64,
+    pub current: bool,
+}
+
+#[derive(Clone, Debug)]
+pub enum SessionMessage {
+    User(String),
+    Assistant(String),
+    Tool {
+        id: String,
+        name: String,
+        arguments: String,
+        output: String,
+        success: bool,
+    },
+    Error(String),
 }
 
 #[derive(Clone, Debug)]
@@ -45,6 +69,15 @@ pub struct ModelOption {
 }
 
 pub enum AppEvent {
+    SessionsListed(Vec<SessionSummary>),
+    SessionFailed(String),
+    SessionResumed {
+        context_tokens: Option<u64>,
+        messages: Vec<SessionMessage>,
+        directory: PathBuf,
+        model: Option<(ProviderId, String)>,
+        context_limit: Option<u64>,
+    },
     ModelSelected {
         provider: ProviderId,
         model: String,

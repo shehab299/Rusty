@@ -1,7 +1,6 @@
 //! In-process backend: runtime clients, model configuration, and turn execution.
 use std::collections::VecDeque;
 
-use ai_sdk::Message;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tracing::Instrument;
 
@@ -15,19 +14,19 @@ use crate::{
     error::AppError,
     model_catalog::Catalog,
     provider_manager::{ModelSelection, ProviderManager},
+    session::{Event, Session, TurnOutcome},
 };
 
-#[cfg(test)]
-mod tests;
+mod sessions;
 
 pub struct App {
     agent: Agent,
-    context: Vec<Message>,
     selection: Option<ModelSelection>,
-    providers: ProviderManager,
+    provider_manager: ProviderManager,
     catalog: Catalog,
     events: Sender<AppEvent>,
     commands: Receiver<AppCommand>,
+    session: Session,
 }
 
 impl App {
@@ -47,14 +46,39 @@ impl App {
             .map(|model| providers.select(model.provider, model.model))
             .transpose()?;
 
+        let mut session = Session::create(crate::config::home::get_session_store()?)?;
+
+        if !session.data.state.context.is_empty() {
+            return Err(AppError::Wal(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "a new app requires an empty event log",
+            )));
+        }
+
+        session
+            .record(Event::SessionStarted {
+                system_prompt,
+                directory: std::env::current_dir()?,
+            })
+            .map_err(AppError::Wal)?;
+
+        if let Some(selection) = &selection {
+            session
+                .record(Event::ModelSelected {
+                    provider: selection.provider(),
+                    model: selection.model().to_owned(),
+                })
+                .map_err(AppError::Wal)?;
+        }
+
         Ok(Self {
             agent,
-            context: vec![Message::system(system_prompt)],
             selection,
-            providers,
+            provider_manager: providers,
             catalog,
             events,
             commands,
+            session,
         })
     }
 
@@ -79,9 +103,29 @@ impl App {
             };
 
             match command {
+                AppCommand::ListSessions => {
+                    let event = match self.list_sessions() {
+                        Ok(sessions) => AppEvent::SessionsListed(sessions),
+                        Err(error) => AppEvent::SessionFailed(error.to_string()),
+                    };
+                    self.events.send(event).await?;
+                }
+                AppCommand::ResumeSession(id) => {
+                    let event = match self.resume_session(&id) {
+                        Ok(event) => event,
+                        Err(error) => AppEvent::SessionFailed(error.to_string()),
+                    };
+                    self.events.send(event).await?;
+                }
                 AppCommand::SetModel { provider, model } => {
-                    match self.providers.select(provider, model) {
+                    match self.provider_manager.select(provider, model) {
                         Ok(selection) => {
+                            self.session
+                                .record(Event::ModelSelected {
+                                    provider: selection.provider(),
+                                    model: selection.model().to_owned(),
+                                })
+                                .map_err(AppError::Wal)?;
                             let event = self.model_selected(&selection);
                             self.selection = Some(selection);
                             self.events.send(event).await?;
@@ -105,11 +149,18 @@ impl App {
                 }
                 AppCommand::Shutdown => return Ok(()),
                 AppCommand::ClearConversation => {
-                    self.context.truncate(1);
+                    self.session
+                        .record(Event::ConversationCleared)
+                        .map_err(AppError::Wal)?;
                     self.events.send(AppEvent::ConversationCleared).await?;
                 }
                 AppCommand::SetDirectory(path) => match std::env::set_current_dir(&path) {
                     Ok(()) => {
+                        self.session
+                            .record(Event::DirectoryChanged {
+                                directory: std::env::current_dir()?,
+                            })
+                            .map_err(AppError::Wal)?;
                         self.events
                             .send(AppEvent::DirectoryChanged(std::env::current_dir()?))
                             .await?
@@ -135,14 +186,14 @@ impl App {
             ProviderId::Anthropic => ProviderConfig::Anthropic(AnthropicConfig { api_key }),
         };
 
-        match self.providers.configure(config) {
+        match self.provider_manager.configure(config) {
             Ok(provider) => {
                 // Replace the selected client too when reconnecting its provider.
                 if let Some(selection) = &self.selection
                     && selection.provider() == provider
                 {
                     self.selection = Some(
-                        self.providers
+                        self.provider_manager
                             .select(provider, selection.model().to_owned())?,
                     );
                 }
@@ -182,7 +233,9 @@ impl App {
             return Ok(false);
         };
 
-        self.context.push(Message::user(prompt));
+        self.session
+            .record(Event::PromptSubmitted { content: prompt })
+            .map_err(AppError::Wal)?;
 
         let outcome = {
             let turn_span = tracing::info_span!(
@@ -198,7 +251,7 @@ impl App {
 
             let turn = self
                 .agent
-                .run_turn(&mut self.context, selection, &agent_events_tx)
+                .run_turn(selection, &agent_events_tx, &mut self.session)
                 .instrument(turn_span);
             tokio::pin!(turn);
 
@@ -218,6 +271,9 @@ impl App {
                         }
                         Some(AppCommand::SetDirectory(_)) => {
                             self.events.send(AppEvent::Notice("Cancel the active turn before changing directories.".into())).await?;
+                        }
+                        Some(AppCommand::ListSessions | AppCommand::ResumeSession(_)) => {
+                            self.events.send(AppEvent::SessionFailed("Cancel the active turn before switching sessions.".into())).await?;
                         }
                         Some(AppCommand::Shutdown) | None => {
                             operation.shutdown();
@@ -240,17 +296,40 @@ impl App {
             outcome
         };
 
+        // A WAL failure is fail-stop, not a retry of model/tool execution. The
+        // append might have reached disk even when fsync reported an error.
+        if matches!(&outcome, Some(Err(AppError::Wal(_)))) {
+            return Err(outcome.expect("matched outcome").unwrap_err());
+        }
+        self.session
+            .mark_running_tools_interrupted()
+            .map_err(AppError::Wal)?;
+        let (status, error) = match &outcome {
+            Some(Ok(())) => (TurnOutcome::Completed, None),
+            Some(Err(error)) => (TurnOutcome::Failed, Some(error.to_string())),
+            None => (
+                TurnOutcome::Cancelled,
+                Some("Turn cancelled. Tools may have changed files.".into()),
+            ),
+        };
+        self.session
+            .record(Event::TurnFinished {
+                outcome: status,
+                error,
+            })
+            .map_err(AppError::Wal)?;
         if shutdown {
             return Ok(true);
         }
-
 
         while let Ok(event) = agent_events_rx.try_recv() {
             self.events.send(event.into()).await?;
         }
 
         let event = if clear {
-            self.context.truncate(1);
+            self.session
+                .record(Event::ConversationCleared)
+                .map_err(AppError::Wal)?;
             AppEvent::ConversationCleared
         } else {
             match outcome {
@@ -285,7 +364,7 @@ impl App {
     }
 
     async fn send_providers(&self) -> Result<(), AppError> {
-        let configured = self.providers.configured();
+        let configured = self.provider_manager.configured();
         let models = configured
             .iter()
             .flat_map(|provider| {

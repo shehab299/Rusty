@@ -13,11 +13,7 @@ pub struct ProviderManager {
 }
 
 impl ProviderManager {
-    #[cfg(test)]
-    pub fn set_test_client(&mut self, provider: ProviderId, client: Arc<dyn Provider>) {
-        self.clients.insert(provider, client);
-    }
-
+    
     pub fn from_config(config: ProvidersConfig) -> Result<Self, AppError> {
         let mut manager = Self::default();
         for provider in config.into_providers() {

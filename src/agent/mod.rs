@@ -1,12 +1,14 @@
-//! Turn execution only. Persistence and application lifecycle live outside the agent.
+//! Turn execution. Durable facts are journaled at model/tool boundaries;
+//! transient output still travels independently over the UI channel.
 use std::collections::HashMap;
 
-use ai_sdk::{GenerateRequest, Message, Tool, ToolCall, Usage, generate_text};
+use ai_sdk::{GenerateRequest, Tool, ToolCall, Usage, generate_text};
 use serde_json::Value;
 use tokio::sync::mpsc::{self, Sender};
 use tool::{DynTool, ToolContext, ToolDelta};
 use tracing::Instrument;
 
+use crate::session::{Event, Session};
 use crate::{comms::AgentEvent, error::AppError, provider_manager::ModelSelection};
 
 pub struct Agent {
@@ -38,18 +40,22 @@ impl Agent {
         })
     }
 
-    /// Updates caller-owned context as work happens, including on cancellation.
+    /// Updates session-owned context, including partial output on cancellation.
     pub async fn run_turn(
         &self,
-        context: &mut Vec<Message>,
         selection: &ModelSelection,
         events: &Sender<AgentEvent>,
+        session: &mut Session,
     ) -> Result<(), AppError> {
         let provider = selection.client();
         let model = selection.model().to_owned();
         loop {
-            let request = GenerateRequest::from_messages(model.clone(), context.clone())
-                .with_tools(self.definitions.clone());
+            let request_sequence = session
+                .record(Event::ModelRequested)
+                .map_err(AppError::Wal)?;
+            let request =
+                GenerateRequest::from_messages(model.clone(), session.data.state.context.clone())
+                    .with_tools(self.definitions.clone());
 
             let request_span = tracing::info_span!(
                 "gen_ai.request",
@@ -89,18 +95,19 @@ impl Agent {
             let calls = response.tool_calls.clone();
 
             let text = response.text.clone();
-            context.push(response.into_message());
-            // Reserve a result for every call before any await. If execution is
-            // interrupted, the next request still has a valid tool-call batch.
-
-            let results_start = context.len();
-
-            for call in &calls {
-                context.push(Message::tool_result(
-                    call.id.clone(),
-                    "Not executed: turn interrupted before this tool started.",
-                ));
-            }
+            let message = response.into_message();
+            session
+                .record(Event::ModelResponded {
+                    request_sequence,
+                    context_tokens: usage.as_ref().and_then(|usage| {
+                        usage
+                            .input_tokens
+                            .map(|input| input.saturating_add(usage.output_tokens.unwrap_or(0)))
+                    }),
+                    message: Box::new(message),
+                })
+                .map_err(AppError::Wal)?;
+            // Recording the response reserves every tool result before any await.
 
             if let Some(usage) = &usage {
                 Self::update_context(usage, events).await?;
@@ -113,14 +120,7 @@ impl Agent {
                 return Ok(());
             }
 
-            for (index, call) in calls.into_iter().enumerate() {
-                let Message::Tool {
-                    content: output, ..
-                } = &mut context[results_start + index]
-                else {
-                    unreachable!("reserved tool result");
-                };
-
+            for call in calls {
                 let tool_span = tracing::info_span!(
                     "tool.execute",
                     tool.name = %call.name,
@@ -133,7 +133,7 @@ impl Agent {
                 let mut operation = crate::telemetry::Operation::new(tool_span.clone());
 
                 let result = self
-                    .execute_tool(&call, output, events)
+                    .execute_tool(&call, events, session)
                     .instrument(tool_span.clone())
                     .await;
 
@@ -149,8 +149,8 @@ impl Agent {
     async fn execute_tool(
         &self,
         call: &ToolCall,
-        output: &mut String,
         events: &Sender<AgentEvent>,
+        session: &mut Session,
     ) -> Result<bool, AppError> {
         let (tool_tx, tool_rx) = mpsc::channel::<ToolDelta>(100);
 
@@ -162,13 +162,19 @@ impl Agent {
             })
             .await?;
 
-        output.clear();
-
+        session
+            .record(Event::ToolStarted {
+                call_id: call.id.clone(),
+            })
+            .map_err(AppError::Wal)?;
         let mut progress = ToolProgress {
-            output,
+            output: String::new(),
+            session,
+            call_id: &call.id,
             receiver: tool_rx,
             completed: false,
         };
+        let mut visible_output = String::new();
 
         let result = match self.tools.get(&call.name) {
             None => Err(AppError::Agent(
@@ -186,6 +192,7 @@ impl Agent {
                             biased;
                             Some(delta) = progress.receiver.recv() => {
                                 progress.output.push_str(&delta.content);
+                                visible_output.push_str(&delta.content);
                                 events.send(AgentEvent::ToolDelta(delta)).await?;
                             }
                             result = &mut execution => break result,
@@ -196,9 +203,11 @@ impl Agent {
             },
         };
 
+        let mut final_events = Vec::new();
         while let Ok(delta) = progress.receiver.try_recv() {
             progress.output.push_str(&delta.content);
-            events.send(AgentEvent::ToolDelta(delta)).await?;
+            visible_output.push_str(&delta.content);
+            final_events.push(AgentEvent::ToolDelta(delta));
         }
 
         let (display_output, final_content, success) = match result {
@@ -218,6 +227,24 @@ impl Agent {
 
         // Record the completed result before sending its display event.
         progress.completed = true;
+        if !display_output.is_empty() {
+            if !visible_output.is_empty() && !visible_output.ends_with('\n') {
+                visible_output.push('\n');
+            }
+            visible_output.push_str(&display_output);
+        }
+        progress
+            .session
+            .record(Event::ToolFinished {
+                call_id: call.id.clone(),
+                content: progress.output.clone(),
+                output: visible_output,
+                success,
+            })
+            .map_err(AppError::Wal)?;
+        for event in final_events {
+            events.send(event).await?;
+        }
         events
             .send(AgentEvent::ToolResult {
                 id: call.id.clone(),
@@ -234,7 +261,7 @@ impl Agent {
         if let Some(input) = usage.input_tokens {
             events
                 .send(AgentEvent::ContextUpdate(
-                    input + usage.output_tokens.unwrap_or(0),
+                    input.saturating_add(usage.output_tokens.unwrap_or(0)),
                 ))
                 .await?;
         }
@@ -245,7 +272,9 @@ impl Agent {
 // Preserve output already emitted by a tool even if its execution future is
 // dropped before the agent gets to receive the remaining deltas.
 struct ToolProgress<'a> {
-    output: &'a mut String,
+    output: String,
+    session: &'a mut Session,
+    call_id: &'a str,
     receiver: mpsc::Receiver<ToolDelta>,
     completed: bool,
 }
@@ -260,6 +289,8 @@ impl Drop for ToolProgress<'_> {
                 0,
                 "Interrupted: tool execution did not finish. Side effects may have occurred.\n",
             );
+            self.session
+                .preserve_tool_output(self.call_id, &self.output);
         }
     }
 }

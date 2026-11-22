@@ -4,10 +4,11 @@ use config::ConfigError;
 use tokio::sync::mpsc::error::{SendError, TrySendError};
 use tokio::task::JoinError;
 
-use crate::comms::{AppCommand, AppEvent, AgentEvent};
+use crate::comms::{AgentEvent, AppCommand, AppEvent};
 
 #[derive(Debug)]
 pub enum AppError {
+    Wal(io::Error),
     Config(ConfigError),
     Agent(Box<dyn Error + Send + Sync + 'static>),
     Tool(Box<dyn Error + Send + Sync + 'static>),
@@ -24,6 +25,10 @@ pub enum AppError {
 impl fmt::Display for AppError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Wal(error) => write!(
+                f,
+                "event log failed: {error}; stopping to avoid unlogged work"
+            ),
             Self::Config(error) => write!(f, "failed to load configuration: {error}"),
             Self::Agent(error) => write!(f, "agent failed: {error}"),
             Self::Tool(error) => write!(f, "{error}"),
@@ -42,6 +47,7 @@ impl fmt::Display for AppError {
 impl Error for AppError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::Wal(error) => Some(error),
             Self::Config(error) => Some(error),
             Self::Agent(error) => Some(error.as_ref()),
             Self::Provider(error) => Some(error.as_ref()),
