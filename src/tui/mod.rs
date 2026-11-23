@@ -11,6 +11,7 @@ use components::{
     PromptComponent, ProviderPopup, ProviderPopupAction, Render, SessionPopup, SlashCommand,
     SlashCommandMenu, SlashCommandMenuAction,
 };
+use crossterm::event::{DisableMouseCapture, EnableMouseCapture, MouseEventKind};
 use crossterm::{
     event::{
         DisableBracketedPaste, EnableBracketedPaste, Event as TerminalEvent, EventStream, KeyCode,
@@ -36,9 +37,11 @@ pub struct Tui {
     prompt: PromptComponent,
     slash_commands_menu: SlashCommandMenu,
     footer: FooterComponent,
+
     provider_popup: Option<ProviderPopup>,
     model_popup: ModelPopup,
     session_popup: SessionPopup,
+
     resume_pending: bool,
     clear_pending: bool,
     configured_providers: Vec<ProviderId>,
@@ -74,6 +77,10 @@ impl Tui {
     }
 
     // Helpers
+
+    fn is_popup_visible(&self) -> bool {
+        self.model_popup.visible || self.session_popup.visible || self.provider_popup.is_some()
+    }
 
     fn set_model(&mut self, provider: ProviderId, model: String) -> Result<(), AppError> {
         if self.pending_model.is_some() {
@@ -230,12 +237,25 @@ impl Tui {
     // Event Handling
 
     async fn handle_terminal_event(&mut self, event: TerminalEvent) {
-        let key = match event {
-            TerminalEvent::Key(k) => k,
-            TerminalEvent::Paste(s) => {
-                self.prompt.insert_text(&s);
+        if let TerminalEvent::Mouse(e) = event {
+            if self.is_popup_visible() {
                 return;
             }
+            match e.kind {
+                MouseEventKind::ScrollUp => self.messages.scroll_up(),
+                MouseEventKind::ScrollDown => self.messages.scroll_down(),
+                _ => {}
+            }
+            return;
+        }
+
+        if let TerminalEvent::Paste(s) = event {
+            self.prompt.insert_text(&s);
+            return;
+        }
+
+        let key = match event {
+            TerminalEvent::Key(k) => k,
             _ => return,
         };
 
@@ -507,7 +527,7 @@ impl Tui {
 
     pub async fn run(&mut self) -> io::Result<()> {
         let mut terminal = ratatui::init();
-        execute!(std::io::stdout(), EnableBracketedPaste)?;
+        execute!(std::io::stdout(), EnableBracketedPaste, EnableMouseCapture)?;
         self.terminal_active = true;
         let mut terminal_events = EventStream::new();
 
@@ -536,7 +556,11 @@ impl Tui {
 impl Drop for Tui {
     fn drop(&mut self) {
         if self.terminal_active {
-            let _ = execute!(std::io::stdout(), DisableBracketedPaste);
+            let _ = execute!(
+                std::io::stdout(),
+                DisableBracketedPaste,
+                DisableMouseCapture
+            );
             ratatui::restore();
         }
     }
