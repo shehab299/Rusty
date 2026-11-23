@@ -447,8 +447,7 @@ impl App {
     // Sessions
 
     pub(super) fn list_sessions(&self) -> Result<Vec<SessionSummary>, AppError> {
-        let directory = self.session.log.path.parent().expect("session directory");
-        let current = &self.session.log.path;
+        let directory = crate::config::home::get_session_store()?;
 
         let mut sessions = Vec::new();
 
@@ -481,7 +480,7 @@ impl App {
                 title,
                 directory,
                 updated: history.updated,
-                current: entry.path() == *current,
+                current: self.session.storage.is_current(&entry.path()),
             });
         }
 
@@ -562,15 +561,9 @@ impl App {
             )));
         }
 
-        let path = self
-            .session
-            .log
-            .path
-            .parent()
-            .expect("session directory")
-            .join(id);
+        let path = crate::config::home::get_session_store()?.join(id);
 
-        if path == self.session.log.path {
+        if self.session.storage.is_current(&path) {
             return Err(AppError::Wal(io::Error::other(
                 "This session is already active",
             )));

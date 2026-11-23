@@ -4,12 +4,18 @@ pub use cache_usage::{CacheUsage, cache_hit_percent};
 pub use event::{Event, TurnOutcome};
 use log::Log;
 pub use state::{State, ToolStatus};
-use std::{io, path::Path};
+use std::{
+    io,
+    path::{Path, PathBuf},
+};
 
 mod cache_usage;
 mod event;
 mod log;
 mod state;
+
+#[cfg(test)]
+mod tests;
 
 #[derive(Debug, Default, PartialEq)]
 pub struct SessionData {
@@ -39,27 +45,54 @@ impl SessionData {
 
 pub struct Session {
     pub data: SessionData,
-    pub(crate) log: Log,
+    pub(crate) storage: Storage,
+}
+
+pub(crate) enum Storage {
+    Pending(PathBuf),
+    Durable(Log),
+}
+
+impl Storage {
+    pub fn is_current(&self, path: &Path) -> bool {
+        matches!(self, Self::Durable(log) if log.path == path)
+    }
 }
 
 impl Session {
     pub fn create(directory: impl AsRef<Path>) -> io::Result<Self> {
-        let log = Log::create(directory)?;
         Ok(Self {
             data: SessionData::default(),
-            log,
+            storage: Storage::Pending(directory.as_ref().to_path_buf()),
         })
     }
 
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
         let log = Log::open(path)?;
         let data = SessionData::load(&log.path)?;
-        Ok(Self { data, log })
+        Ok(Self {
+            data,
+            storage: Storage::Durable(log),
+        })
     }
 
     pub fn record(&mut self, event: Event) -> io::Result<u64> {
         self.data.state.validate(&event)?;
-        let (sequence, updated) = self.log.append(event.clone())?;
+        if matches!(event, Event::PromptSubmitted { .. })
+            && let Storage::Pending(directory) = &self.storage
+        {
+            self.storage = Storage::Durable(Log::create(directory)?);
+            let Storage::Durable(log) = &mut self.storage else {
+                unreachable!()
+            };
+            for event in &self.data.events {
+                log.append(event.clone())?;
+            }
+        }
+        let (sequence, updated) = match &mut self.storage {
+            Storage::Pending(_) => (self.data.events.len() as u64 + 1, crate::utils::timestamp()),
+            Storage::Durable(log) => log.append(event.clone())?,
+        };
         self.data.state.apply(sequence, &event);
         self.data.events.push(event);
         self.data.updated = updated;
