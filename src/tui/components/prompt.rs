@@ -1,4 +1,4 @@
-use crate::tui::components::Render;
+use crate::tui::components::Component;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -155,7 +155,7 @@ impl PromptComponent {
     }
 }
 
-impl Render for PromptComponent {
+impl Component for PromptComponent {
     fn render(&self, f: &mut Frame, area: Rect) {
         f.render_widget(&self.prompt, area);
     }

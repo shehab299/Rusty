@@ -1,4 +1,4 @@
-use crate::tui::components::Render;
+use crate::tui::components::Component;
 use ratatui::{
     Frame,
     buffer::Buffer,
@@ -135,7 +135,7 @@ impl MessageComponent {
     }
 }
 
-impl Render for MessageComponent {
+impl Component for MessageComponent {
     fn render(&self, f: &mut Frame, area: Rect) {
         f.render_widget(self.widget(), area);
     }

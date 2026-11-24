@@ -1,4 +1,4 @@
-use super::Render;
+use super::Component;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
@@ -148,7 +148,7 @@ impl SlashCommandMenu {
     }
 }
 
-impl Render for SlashCommandMenu {
+impl Component for SlashCommandMenu {
     fn render(&self, f: &mut Frame, area: Rect) {
         if !self.visible || area.is_empty() {
             return;

@@ -1,4 +1,4 @@
-use super::Render;
+use super::Component;
 use crate::comms::SessionSummary;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
@@ -90,7 +90,7 @@ impl SessionPopup {
     }
 }
 
-impl Render for SessionPopup {
+impl Component for SessionPopup {
     fn render(&self, f: &mut Frame, area: Rect) {
         if !self.visible || area.is_empty() {
             return;

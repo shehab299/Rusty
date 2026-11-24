@@ -1,4 +1,4 @@
-use super::Render;
+use super::Component;
 use crate::comms::ModelOption;
 use crate::config::provider::ProviderId;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -146,7 +146,7 @@ impl ModelPopup {
     }
 }
 
-impl Render for ModelPopup {
+impl Component for ModelPopup {
     fn render(&self, f: &mut Frame, area: Rect) {
         if !self.visible {
             return;

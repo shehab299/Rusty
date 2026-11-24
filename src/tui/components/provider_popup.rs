@@ -1,3 +1,4 @@
+use super::Component;
 use crate::config::provider::ProviderId;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
@@ -136,8 +137,10 @@ impl ProviderPopup {
             },
         }
     }
+}
 
-    pub fn render(&self, f: &mut Frame, area: Rect) {
+impl Component for ProviderPopup {
+    fn render(&self, f: &mut Frame, area: Rect) {
         let width = area.width.min(64);
         let desired_height = match self.screen {
             Screen::Providers => 18,

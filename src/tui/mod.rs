@@ -1,21 +1,20 @@
-use std::io;
+use std::{io, time::Duration};
 
-use crate::error::AppError;
 use crate::{
     comms::{AppCommand, AppEvent},
     config::provider::ProviderId,
+    error::AppError,
     session::cache_hit_percent,
 };
 use components::{
-    FooterComponent, MessageComponent, MessagesComponent, ModelPopup, ModelPopupAction,
-    PromptComponent, ProviderPopup, ProviderPopupAction, Render, SessionPopup, SlashCommand,
+    Component, FooterComponent, MessageComponent, MessagesComponent, ModelPopup, ModelPopupAction,
+    PromptComponent, ProviderPopup, ProviderPopupAction, SessionPopup, SlashCommand,
     SlashCommandMenu, SlashCommandMenuAction,
 };
-use crossterm::event::{DisableMouseCapture, EnableMouseCapture, MouseEventKind};
 use crossterm::{
     event::{
-        DisableBracketedPaste, EnableBracketedPaste, Event as TerminalEvent, EventStream, KeyCode,
-        KeyEventKind, KeyModifiers,
+        DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event as TerminalEvent, EventStream, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind,
     },
     execute,
 };
@@ -25,7 +24,10 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
 };
 use ratatui_textarea::Input;
-use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::{
+    sync::mpsc::{Receiver, Sender},
+    time::{Duration, Instant, interval},
+};
 
 mod components;
 
@@ -531,12 +533,21 @@ impl Tui {
         self.terminal_active = true;
         let mut terminal_events = EventStream::new();
 
+        let mut animation_timer = interval(Duration::from_millis(100));
+        animation_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut last_tick = Instant::now();
+
         while !self.should_quit {
             terminal
                 .draw(|f| self.render(f, f.area()))
                 .map_err(|error| io::Error::other(error.to_string()))?;
 
             tokio::select! {
+                _ = animation_timer.tick() => {
+                    let now = Instant::now();
+                    self.update(now.duration_since(last_tick));
+                    last_tick = now;
+                },
                 event = self.events_rx.recv() => match event {
                     Some(event) => self.handle_app_event(event),
                     None => break,
@@ -566,7 +577,19 @@ impl Drop for Tui {
     }
 }
 
-impl Render for Tui {
+impl Component for Tui {
+    fn update(&mut self, elapsed: Duration) {
+        self.footer.update(elapsed);
+        self.prompt.update(elapsed);
+        self.slash_commands_menu.update(elapsed);
+        self.messages.update(elapsed);
+        if let Some(popup) = &mut self.provider_popup {
+            popup.update(elapsed);
+        }
+        self.model_popup.update(elapsed);
+        self.session_popup.update(elapsed);
+    }
+
     fn render(&self, f: &mut Frame, _area: Rect) {
         let layout = Layout::default()
             .direction(Direction::Vertical)
@@ -603,7 +626,7 @@ mod tests {
         Tui::new(commands, events)
     }
 
-    fn render(component: &impl Render) -> String {
+    fn render(component: &impl Component) -> String {
         let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
         terminal
             .draw(|frame| component.render(frame, frame.area()))
@@ -616,6 +639,19 @@ mod tests {
             .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn ticks_reach_components_without_a_busy_turn() {
+        let mut tui = tui();
+        tui.footer.set_busy_status();
+        assert!(!tui.busy);
+        tui.update(Duration::from_millis(100));
+        assert!(render(&tui.footer).starts_with("⠙ Thinking…"));
+        tui.footer.set_default_status();
+        let before = render(&tui.footer);
+        tui.update(Duration::from_millis(100));
+        assert_eq!(render(&tui.footer), before);
     }
 
     #[test]

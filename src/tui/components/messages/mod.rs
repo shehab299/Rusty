@@ -1,4 +1,4 @@
-use crate::tui::components::Render;
+use crate::tui::components::Component;
 use message::render_message;
 pub use message::{MessageComponent, ToolStatus};
 use ratatui::{
@@ -121,7 +121,7 @@ impl MessagesComponent {
     }
 }
 
-impl Render for MessagesComponent {
+impl Component for MessagesComponent {
     fn render(&self, f: &mut Frame, area: Rect) {
         let mut text = Text::default();
         text.extend(Text::styled(LOGO, Style::default().fg(Color::Cyan)));

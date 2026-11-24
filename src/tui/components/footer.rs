@@ -1,13 +1,15 @@
 use crate::session::{CacheUsage, cache_hit_percent};
-use crate::tui::components::Render;
+use crate::tui::components::{Component, Spinner};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
+use std::time::Duration;
 
 pub struct FooterComponent {
     status: String,
+    spinner: Option<Spinner>,
     context_size: Option<u64>,
     context_limit: Option<u64>,
     pub(in crate::tui) cache_usage: CacheUsage,
@@ -17,6 +19,7 @@ impl FooterComponent {
     pub fn new() -> Self {
         let mut footer = Self {
             status: String::new(),
+            spinner: None,
             context_size: None,
             context_limit: None,
             cache_usage: CacheUsage::default(),
@@ -27,6 +30,7 @@ impl FooterComponent {
 
     pub fn set_status(&mut self, status: impl Into<String>) {
         self.status = status.into();
+        self.spinner = None;
     }
 
     pub fn set_context_size(&mut self, tokens: u64) {
@@ -38,12 +42,12 @@ impl FooterComponent {
     }
 
     pub fn set_busy_status(&mut self) {
-        self.status = "Thinking… Esc: cancel | Ctrl+C: quit".to_string()
+        self.status = "Thinking… Esc: cancel | Ctrl+C: quit".to_string();
+        self.spinner.get_or_insert_with(Spinner::default);
     }
 
     pub fn set_default_status(&mut self) {
-        self.status =
-            "Enter: send | Alt+Enter: newline | PgUp/PgDn: scroll | Ctrl+C: quit".to_string()
+        self.set_status("Enter: send | Alt+Enter: newline | PgUp/PgDn: scroll | Ctrl+C: quit");
     }
     fn context_labels(&self) -> (String, String) {
         let compact = match (self.context_size, self.context_limit) {
@@ -85,7 +89,7 @@ impl FooterComponent {
 
     fn metrics_label(&self, width: u16) -> String {
         // Keep status and keyboard hints readable before allocating secondary metrics.
-        let status_width = self.status.chars().count();
+        let status_width = self.status.chars().count() + if self.spinner.is_some() { 2 } else { 0 };
         let available = usize::from(width).saturating_sub(status_width + 1);
         let (context, compact_context) = self.context_labels();
         let cache = self.cache_label();
@@ -103,7 +107,13 @@ impl FooterComponent {
     }
 }
 
-impl Render for FooterComponent {
+impl Component for FooterComponent {
+    fn update(&mut self, elapsed: Duration) {
+        if let Some(spinner) = &mut self.spinner {
+            spinner.update(elapsed);
+        }
+    }
+
     fn render(&self, f: &mut Frame, area: Rect) {
         let metrics = self.metrics_label(area.width);
         let areas = Layout::horizontal([
@@ -115,12 +125,24 @@ impl Render for FooterComponent {
             }),
         ])
         .split(area);
+
+        let mut status_area = areas[0];
+
+        if let Some(spinner) = &self.spinner {
+            let [spinner_area, text_area] =
+                Layout::horizontal([Constraint::Length(2), Constraint::Min(0)]).areas(status_area);
+            f.buffer_mut()
+                .set_style(spinner_area, Style::default().fg(Color::DarkGray));
+            spinner.render(f, spinner_area);
+            status_area = text_area;
+        }
+
         f.render_widget(
             Paragraph::new(Line::styled(
                 &self.status,
                 Style::default().fg(Color::DarkGray),
             )),
-            areas[0],
+            status_area,
         );
         f.render_widget(
             Paragraph::new(Line::styled(metrics, Style::default().fg(Color::DarkGray)))
@@ -147,6 +169,56 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect()
+    }
+
+    #[test]
+    fn busy_spinner_advances_and_wraps() {
+        let mut footer = FooterComponent::new();
+        footer.set_busy_status();
+        let first = render_footer(&footer, 120);
+        assert!(first.starts_with("⠋ Thinking…"));
+
+        footer.update(Duration::from_millis(100));
+        assert!(render_footer(&footer, 120).starts_with("⠙ Thinking…"));
+        // Receiving another busy event must not restart the animation.
+        footer.set_busy_status();
+        assert!(render_footer(&footer, 120).starts_with("⠙ Thinking…"));
+        footer.update(Duration::from_millis(900));
+        assert_eq!(render_footer(&footer, 120), first);
+    }
+
+    #[test]
+    fn spinner_uses_elapsed_time_and_preserves_partial_ticks() {
+        let mut footer = FooterComponent::new();
+        footer.set_busy_status();
+        footer.update(Duration::from_millis(60));
+        assert!(render_footer(&footer, 120).starts_with("⠋ Thinking…"));
+        footer.update(Duration::from_millis(60));
+        assert!(render_footer(&footer, 120).starts_with("⠙ Thinking…"));
+        footer.update(Duration::from_millis(280));
+        assert!(render_footer(&footer, 120).starts_with("⠼ Thinking…"));
+
+        footer.update(Duration::from_millis(50));
+        footer.set_default_status();
+        footer.set_busy_status();
+        footer.update(Duration::from_millis(50));
+        assert!(render_footer(&footer, 120).starts_with("⠋ Thinking…"));
+    }
+
+    #[test]
+    fn status_changes_stop_the_spinner() {
+        let mut footer = FooterComponent::new();
+        for status in [None, Some("An error occurred")] {
+            footer.set_busy_status();
+            match status {
+                Some(status) => footer.set_status(status),
+                None => footer.set_default_status(),
+            }
+            let before = render_footer(&footer, 120);
+            footer.update(Duration::from_millis(100));
+            assert_eq!(render_footer(&footer, 120), before);
+            assert!(footer.spinner.is_none());
+        }
     }
 
     #[test]
