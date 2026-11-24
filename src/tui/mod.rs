@@ -26,7 +26,7 @@ use ratatui::{
 use ratatui_textarea::Input;
 use tokio::{
     sync::mpsc::{Receiver, Sender},
-    time::{Duration, Instant, interval},
+    time::{Instant, interval},
 };
 
 mod components;
@@ -581,7 +581,6 @@ impl Component for Tui {
     fn update(&mut self, elapsed: Duration) {
         self.footer.update(elapsed);
         self.prompt.update(elapsed);
-        self.slash_commands_menu.update(elapsed);
         self.messages.update(elapsed);
         if let Some(popup) = &mut self.provider_popup {
             popup.update(elapsed);

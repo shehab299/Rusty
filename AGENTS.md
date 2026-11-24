@@ -15,3 +15,8 @@
 - Prefer direct access over trivial getters
 - Use composition instead of duplicating fields.
 - Choose names that describe actual behavior. Reading records isn’t replaying state; marking interruptions isn’t stopping tools.
+
+## Module ownership
+
+- Place domain types and their behavior in the subsystem that owns their meaning, not in modules that merely transport or display them.
+- Keep communication modules focused on commands, events, and protocol payloads; import domain types from their owning modules.
