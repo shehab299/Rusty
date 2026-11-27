@@ -8,7 +8,12 @@ use super::{ModelError, Provider};
 use crate::{GenerateRequest, GenerateResponse, async_trait};
 
 mod options;
+mod responses;
 mod types;
+
+pub use responses::{
+    InputTokenDetails, OpenAIResponsesDetails, OpenAIResponsesUsage, OutputTokenDetails,
+};
 
 pub use options::{
     JsonSchema, OpenAIOptions, Prediction, PredictionContent, PredictionTextPart, PromptCacheMode,
@@ -20,12 +25,22 @@ pub use types::{CompletionTokenDetails, OpenAIResponseDetails, OpenAIUsage, Prom
 use types::{OpenAIChatCompletionRequest, OpenAIChatCompletionResponse};
 
 const ENDPOINT: &str = "https://api.openai.com/v1/chat/completions";
+const RESPONSES_ENDPOINT: &str = "https://api.openai.com/v1/responses";
+
+/// The OpenAI protocol used by a client. Chat Completions remains the default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OpenAIApi {
+    #[default]
+    ChatCompletions,
+    Responses,
+}
 
 #[derive(Clone)]
 pub struct OpenAI {
     client: reqwest::Client,
     authorization: HeaderValue,
     endpoint: String,
+    api: OpenAIApi,
 }
 
 impl OpenAI {
@@ -61,7 +76,19 @@ impl OpenAI {
             client,
             authorization,
             endpoint: ENDPOINT.into(),
+            api: OpenAIApi::default(),
         })
+    }
+
+    /// Select a protocol without changing the shared generation interface.
+    pub fn with_api(mut self, api: OpenAIApi) -> Self {
+        self.api = api;
+        self.endpoint = match api {
+            OpenAIApi::ChatCompletions => ENDPOINT,
+            OpenAIApi::Responses => RESPONSES_ENDPOINT,
+        }
+        .into();
+        self
     }
 }
 
@@ -72,6 +99,9 @@ impl Provider for OpenAI {
     }
 
     async fn generate(&self, request: GenerateRequest) -> Result<GenerateResponse, ModelError> {
+        if self.api == OpenAIApi::Responses {
+            return self.generate_response(request).await.map_err(Into::into);
+        }
         let response = self
             .client
             .post(&self.endpoint)

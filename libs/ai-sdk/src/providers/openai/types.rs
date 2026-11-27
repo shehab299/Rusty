@@ -300,6 +300,9 @@ pub(super) struct CompletionChoice {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct OpenAIResponseDetails {
+    /// Responses-specific context. Absent in Chat Completions and older history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub responses: Option<super::OpenAIResponsesDetails>,
     pub created: Option<u64>,
     pub system_fingerprint: Option<String>,
     pub service_tier: Option<String>,
