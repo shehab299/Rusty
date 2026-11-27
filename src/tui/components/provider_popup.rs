@@ -1,10 +1,11 @@
 use super::Component;
 use crate::config::provider::ProviderId;
+use crate::tui::theme;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Modifier, Style},
+    style::Style,
     text::{Line, Span},
     widgets::{Block, Clear, List, ListItem, ListState, Paragraph},
 };
@@ -17,6 +18,7 @@ enum Screen {
 }
 
 pub struct ProviderPopup {
+    pub visible: bool,
     screen: Screen,
     configured: Vec<ProviderId>,
     selected: ProviderId,
@@ -29,8 +31,10 @@ impl ProviderPopup {
     pub fn new(configured: Vec<ProviderId>) -> Self {
         let mut search = TextArea::default();
         search.set_placeholder_text("Search");
+        theme::style_input(&mut search);
 
         Self {
+            visible: false,
             screen: Screen::Providers,
             configured,
             selected: ProviderId::ALL[0],
@@ -40,10 +44,21 @@ impl ProviderPopup {
         }
     }
 
+    pub fn open(&mut self) {
+        *self = Self::new(self.configured.clone());
+        self.visible = true;
+    }
+
+    pub fn close(&mut self) {
+        self.visible = false;
+        self.api_key = Self::new_api_key_input();
+    }
+
     fn new_api_key_input() -> TextArea<'static> {
         let mut input = TextArea::default();
         input.set_placeholder_text("API key");
         input.set_mask_char('•');
+        theme::style_input(&mut input);
         input
     }
 
@@ -141,6 +156,10 @@ impl ProviderPopup {
 
 impl Component for ProviderPopup {
     fn render(&self, f: &mut Frame, area: Rect) {
+        if !self.visible {
+            return;
+        }
+
         let width = area.width.min(64);
         let desired_height = match self.screen {
             Screen::Providers => 18,
@@ -154,7 +173,12 @@ impl Component for ProviderPopup {
             height,
         );
         f.render_widget(Clear, panel);
-        f.render_widget(Block::bordered(), panel);
+        f.render_widget(
+            Block::bordered()
+                .style(theme::base())
+                .border_style(Style::default().fg(theme::RULE)),
+            panel,
+        );
         let inner = panel.inner(ratatui::layout::Margin::new(2, 1));
         let title = match self.screen {
             Screen::Providers => "Connect a provider".to_owned(),
@@ -196,8 +220,7 @@ impl Component for ProviderPopup {
                     .iter()
                     .position(|id| *id == self.selected_provider());
                 let mut state = ListState::default().with_selected(selected);
-                let list = List::new(items)
-                    .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+                let list = List::new(items).highlight_style(theme::selection());
                 f.render_stateful_widget(list, rows[3], &mut state);
             }
             Screen::ApiKey => {
@@ -228,4 +251,63 @@ pub enum ProviderPopupAction {
         provider: ProviderId,
         api_key: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::KeyModifiers;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn opening_resets_inputs_and_preserves_configured_providers() {
+        let mut popup = ProviderPopup::new(Vec::new());
+        assert!(!popup.visible);
+        let provider = ProviderId::ALL[0];
+        popup.set_configured_providers(vec![provider]);
+        popup.open();
+        popup.search.insert_str("search");
+        popup.api_key.insert_str("secret");
+        popup.screen = Screen::ApiKey;
+        popup.set_message("Connection failed");
+
+        popup.close();
+        assert!(!popup.visible);
+        assert!(popup.api_key().is_empty());
+        popup.open();
+        assert!(popup.visible);
+        assert!(matches!(popup.screen, Screen::Providers));
+        assert_eq!(popup.configured, vec![provider]);
+        assert_eq!(popup.search.lines().join(""), "");
+        assert!(popup.api_key().is_empty());
+        assert!(popup.message.is_empty());
+    }
+
+    #[test]
+    fn hidden_popup_does_not_render() {
+        let popup = ProviderPopup::new(Vec::new());
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        let before = terminal.backend().buffer().clone();
+        terminal
+            .draw(|frame| popup.render(frame, frame.area()))
+            .unwrap();
+        assert_eq!(terminal.backend().buffer(), &before);
+    }
+
+    #[test]
+    fn escape_returns_from_api_key_before_closing() {
+        let mut popup = ProviderPopup::new(Vec::new());
+        popup.open();
+        popup.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let escape = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        assert!(matches!(
+            popup.handle_key(escape),
+            ProviderPopupAction::None
+        ));
+        assert!(popup.visible);
+        assert!(matches!(
+            popup.handle_key(escape),
+            ProviderPopupAction::Close
+        ));
+    }
 }

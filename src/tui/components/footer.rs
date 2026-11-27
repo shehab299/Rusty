@@ -1,8 +1,9 @@
 use crate::session::{CacheUsage, cache_hit_percent};
 use crate::tui::components::{Component, Spinner};
+use crate::tui::theme;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use std::time::Duration;
@@ -132,7 +133,7 @@ impl Component for FooterComponent {
             let [spinner_area, text_area] =
                 Layout::horizontal([Constraint::Length(2), Constraint::Min(0)]).areas(status_area);
             f.buffer_mut()
-                .set_style(spinner_area, Style::default().fg(Color::DarkGray));
+                .set_style(spinner_area, Style::default().fg(theme::ACCENT));
             spinner.render(f, spinner_area);
             status_area = text_area;
         }
@@ -140,12 +141,12 @@ impl Component for FooterComponent {
         f.render_widget(
             Paragraph::new(Line::styled(
                 &self.status,
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme::MUTED),
             )),
             status_area,
         );
         f.render_widget(
-            Paragraph::new(Line::styled(metrics, Style::default().fg(Color::DarkGray)))
+            Paragraph::new(Line::styled(metrics, Style::default().fg(theme::MUTED)))
                 .right_aligned(),
             areas[1],
         );

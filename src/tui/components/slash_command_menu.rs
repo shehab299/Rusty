@@ -1,9 +1,10 @@
 use super::Component;
+use crate::tui::theme;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::Style,
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState},
 };
@@ -110,7 +111,7 @@ impl SlashCommandMenu {
         }
     }
 
-    pub fn update(&mut self, content: &str) {
+    pub fn set_query(&mut self, content: &str) {
         if self.query == content {
             return;
         }
@@ -160,7 +161,7 @@ impl Component for SlashCommandMenu {
                 ListItem::new(Line::from(vec![
                     Span::styled(
                         format!("{:<12}", command.name()),
-                        Style::default().fg(Color::Cyan),
+                        Style::default().fg(theme::ACCENT),
                     ),
                     Span::raw(command.description()),
                 ]))
@@ -169,14 +170,12 @@ impl Component for SlashCommandMenu {
         let list = List::new(items)
             .block(
                 Block::default()
-                    .borders(Borders::ALL)
+                    .borders(Borders::TOP)
+                    .style(theme::base())
+                    .border_style(Style::default().fg(theme::RULE))
                     .title("Commands · ↑/↓ · tab complete · enter run · esc"),
             )
-            .highlight_style(
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD),
-            )
+            .highlight_style(theme::selection())
             .highlight_symbol("› ");
         let mut state = ListState::default().with_selected(Some(self.selected));
         f.render_stateful_widget(list, area, &mut state);

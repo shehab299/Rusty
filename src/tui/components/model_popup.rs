@@ -1,13 +1,14 @@
 use super::Component;
 use crate::comms::ModelOption;
 use crate::config::provider::ProviderId;
+use crate::tui::theme;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Margin, Rect},
-    style::{Color, Modifier, Style, Stylize},
+    style::{Modifier, Style, Stylize},
     text::{Line, Span},
-    widgets::{Clear, List, ListItem, ListState, Paragraph},
+    widgets::{Block, Clear, List, ListItem, ListState, Paragraph},
 };
 use ratatui_textarea::{Input, TextArea};
 
@@ -45,7 +46,7 @@ impl ModelPopup {
     fn new_search() -> TextArea<'static> {
         let mut search = TextArea::default();
         search.set_placeholder_text("Search");
-        search.set_cursor_line_style(Style::default());
+        theme::style_input(&mut search);
         search
     }
 
@@ -161,6 +162,12 @@ impl Component for ModelPopup {
             height,
         );
         f.render_widget(Clear, panel);
+        f.render_widget(
+            Block::bordered()
+                .style(theme::base())
+                .border_style(Style::default().fg(theme::RULE)),
+            panel,
+        );
 
         let rows = Layout::vertical([
             Constraint::Length(1),
@@ -175,7 +182,7 @@ impl Component for ModelPopup {
 
         let title = Layout::horizontal([Constraint::Min(0), Constraint::Length(3)]).split(rows[0]);
         f.render_widget(Paragraph::new("Select model").bold(), title[0]);
-        f.render_widget(Paragraph::new("esc").fg(Color::DarkGray), title[1]);
+        f.render_widget(Paragraph::new("esc").fg(theme::MUTED), title[1]);
 
         f.render_widget(&self.search, rows[2]);
 
@@ -208,7 +215,7 @@ impl Component for ModelPopup {
                     items.push(ListItem::new(Line::styled(
                         model.provider.to_string(),
                         Style::default()
-                            .fg(Color::Yellow)
+                            .fg(theme::ACCENT)
                             .add_modifier(Modifier::BOLD),
                     )));
                     previous_provider = Some(model.provider);
@@ -218,16 +225,11 @@ impl Component for ModelPopup {
                 }
                 let mut spans = vec![Span::raw(model.name.clone())];
                 if model.is_free {
-                    spans.push(Span::styled("  Free", Style::default().fg(Color::DarkGray)));
+                    spans.push(Span::styled("  Free", Style::default().fg(theme::MUTED)));
                 }
                 items.push(ListItem::new(Line::from(spans)));
             }
-            let list = List::new(items).highlight_style(
-                Style::default()
-                    .bg(Color::Blue)
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            );
+            let list = List::new(items).highlight_style(theme::selection());
             let mut state = ListState::default().with_selected(selected_row);
             f.render_stateful_widget(list, rows[4], &mut state);
         }

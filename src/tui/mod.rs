@@ -21,7 +21,8 @@ use crossterm::{
 use futures_util::StreamExt;
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Margin, Rect},
+    widgets::Block,
 };
 use ratatui_textarea::Input;
 use tokio::{
@@ -30,6 +31,7 @@ use tokio::{
 };
 
 mod components;
+mod theme;
 
 pub struct Tui {
     commands_tx: Sender<AppCommand>,
@@ -40,13 +42,12 @@ pub struct Tui {
     slash_commands_menu: SlashCommandMenu,
     footer: FooterComponent,
 
-    provider_popup: Option<ProviderPopup>,
+    provider_popup: ProviderPopup,
     model_popup: ModelPopup,
     session_popup: SessionPopup,
 
     resume_pending: bool,
     clear_pending: bool,
-    configured_providers: Vec<ProviderId>,
     pending_model: Option<(ProviderId, String)>,
     pending_provider: Option<ProviderId>,
 
@@ -67,12 +68,11 @@ impl Tui {
             busy: false,
             should_quit: false,
             terminal_active: false,
-            provider_popup: None,
+            provider_popup: ProviderPopup::new(Vec::new()),
             model_popup: ModelPopup::new(),
             session_popup: SessionPopup::default(),
             resume_pending: false,
             clear_pending: false,
-            configured_providers: Vec::new(),
             pending_model: None,
             pending_provider: None,
         }
@@ -81,7 +81,7 @@ impl Tui {
     // Helpers
 
     fn is_popup_visible(&self) -> bool {
-        self.model_popup.visible || self.session_popup.visible || self.provider_popup.is_some()
+        self.model_popup.visible || self.session_popup.visible || self.provider_popup.visible
     }
 
     fn set_model(&mut self, provider: ProviderId, model: String) -> Result<(), AppError> {
@@ -102,7 +102,7 @@ impl Tui {
             SlashCommandMenuAction::Consumed => true,
             SlashCommandMenuAction::Complete(command) => {
                 self.prompt.set_content(command.name());
-                self.slash_commands_menu.update(command.name());
+                self.slash_commands_menu.set_query(command.name());
                 true
             }
             SlashCommandMenuAction::Execute(command) => {
@@ -116,7 +116,7 @@ impl Tui {
         match action {
             ModelPopupAction::None => {}
             ModelPopupAction::Connect => {
-                self.provider_popup = Some(ProviderPopup::new(self.configured_providers.clone()));
+                self.provider_popup.open();
             }
             ModelPopupAction::Select { provider, model } => match self.set_model(provider, model) {
                 Ok(()) => self.model_popup.set_error("Selecting model…".into()),
@@ -125,17 +125,12 @@ impl Tui {
         }
     }
 
-    fn handle_provider_popup_action(
-        &mut self,
-        action: ProviderPopupAction,
-        mut popup: ProviderPopup,
-    ) {
+    fn handle_provider_popup_action(&mut self, action: ProviderPopupAction) {
         match action {
-            ProviderPopupAction::None => self.provider_popup = Some(popup),
-            ProviderPopupAction::Close => {}
+            ProviderPopupAction::None => {}
+            ProviderPopupAction::Close => self.provider_popup.close(),
             ProviderPopupAction::Configure { provider, api_key } => {
                 if self.pending_provider.is_some() {
-                    self.provider_popup = Some(popup);
                     return;
                 }
                 match self
@@ -144,13 +139,12 @@ impl Tui {
                 {
                     Ok(()) => {
                         self.pending_provider = Some(provider);
-                        popup.set_message("Connecting…");
+                        self.provider_popup.set_message("Connecting…");
                     }
                     Err(error) => {
-                        popup.set_message(error.to_string());
+                        self.provider_popup.set_message(error.to_string());
                     }
                 }
-                self.provider_popup = Some(popup);
             }
         }
     }
@@ -166,7 +160,7 @@ impl Tui {
         match slash_command {
             Some(SlashCommand::Session) => {
                 self.prompt.clear();
-                self.slash_commands_menu.update("");
+                self.slash_commands_menu.set_query("");
                 if self.busy || self.clear_pending {
                     self.footer
                         .set_status("Cancel the active turn before switching sessions.");
@@ -179,15 +173,15 @@ impl Tui {
                 true
             }
             Some(SlashCommand::Connect) => {
-                self.provider_popup = Some(ProviderPopup::new(self.configured_providers.clone()));
+                self.provider_popup.open();
                 self.prompt.clear();
-                self.slash_commands_menu.update("");
+                self.slash_commands_menu.set_query("");
                 true
             }
             Some(SlashCommand::Models) => {
                 self.model_popup.open();
                 self.prompt.clear();
-                self.slash_commands_menu.update("");
+                self.slash_commands_menu.set_query("");
                 true
             }
             Some(SlashCommand::CD) => {
@@ -204,18 +198,18 @@ impl Tui {
                     self.messages.scroll_to_bottom();
                 }
                 self.prompt.clear();
-                self.slash_commands_menu.update("");
+                self.slash_commands_menu.set_query("");
                 true
             }
             Some(SlashCommand::Exit) => {
                 self.should_quit = true;
                 self.prompt.clear();
-                self.slash_commands_menu.update("");
+                self.slash_commands_menu.set_query("");
                 true
             }
             Some(SlashCommand::Clear) => {
                 self.prompt.clear();
-                self.slash_commands_menu.update("");
+                self.slash_commands_menu.set_query("");
                 let result = self
                     .commands_tx
                     .try_send(AppCommand::ClearConversation)
@@ -286,9 +280,9 @@ impl Tui {
             return;
         }
 
-        if let Some(mut popup) = self.provider_popup.take() {
-            let popup_action = popup.handle_key(key);
-            self.handle_provider_popup_action(popup_action, popup);
+        if self.provider_popup.visible {
+            let popup_action = self.provider_popup.handle_key(key);
+            self.handle_provider_popup_action(popup_action);
             return;
         }
 
@@ -343,7 +337,7 @@ impl Tui {
                 self.prompt.input(Input::from(key));
             }
         }
-        self.slash_commands_menu.update(&self.prompt.content());
+        self.slash_commands_menu.set_query(&self.prompt.content());
     }
 
     fn handle_app_event(&mut self, event: AppEvent) {
@@ -444,23 +438,18 @@ impl Tui {
                 self.model_popup.set_error(error);
             }
             AppEvent::ProvidersUpdated { configured, models } => {
-                self.configured_providers = configured.clone();
                 self.model_popup
                     .set_configured_providers(configured.clone());
                 self.model_popup.set_models(models);
-                if let Some(popup) = &mut self.provider_popup {
-                    popup.set_configured_providers(configured);
-                }
+                self.provider_popup.set_configured_providers(configured);
             }
             AppEvent::ProviderConfigured { provider } => {
                 if self.pending_provider == Some(provider) {
                     self.pending_provider = None;
-                    if self
-                        .provider_popup
-                        .as_ref()
-                        .is_some_and(|popup| popup.selected_provider() == provider)
+                    if self.provider_popup.visible
+                        && self.provider_popup.selected_provider() == provider
                     {
-                        self.provider_popup = None;
+                        self.provider_popup.close();
                     }
                 }
                 self.footer.set_status(format!("Configured {provider}"));
@@ -470,10 +459,10 @@ impl Tui {
                     self.pending_provider = None;
                 }
                 self.footer.set_status(error.clone());
-                if let Some(popup) = &mut self.provider_popup
-                    && popup.selected_provider() == provider
+                if self.provider_popup.visible
+                    && self.provider_popup.selected_provider() == provider
                 {
-                    popup.set_message(error);
+                    self.provider_popup.set_message(error);
                 }
             }
             AppEvent::DirectoryChanged(path) => {
@@ -581,33 +570,34 @@ impl Component for Tui {
     fn update(&mut self, elapsed: Duration) {
         self.footer.update(elapsed);
         self.prompt.update(elapsed);
+        self.slash_commands_menu.update(elapsed);
         self.messages.update(elapsed);
-        if let Some(popup) = &mut self.provider_popup {
-            popup.update(elapsed);
-        }
+        self.provider_popup.update(elapsed);
         self.model_popup.update(elapsed);
         self.session_popup.update(elapsed);
     }
 
     fn render(&self, f: &mut Frame, _area: Rect) {
+        f.render_widget(Block::default().style(theme::base()), f.area());
+        let area = f
+            .area()
+            .inner(Margin::new(if f.area().width >= 80 { 4 } else { 1 }, 0));
         let layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Fill(1),
                 Constraint::Length(self.slash_commands_menu.height()),
-                Constraint::Length(self.prompt.height(f.area().width, f.area().height)),
+                Constraint::Length(self.prompt.height(area.width, area.height)),
                 Constraint::Length(1),
             ]);
 
-        let areas = layout.split(f.area());
+        let areas = layout.split(area);
 
         self.footer.render(f, areas[3]);
         self.prompt.render(f, areas[2]);
         self.slash_commands_menu.render(f, areas[1]);
         self.messages.render(f, areas[0]);
-        if let Some(popup) = &self.provider_popup {
-            popup.render(f, f.area());
-        }
+        self.provider_popup.render(f, f.area());
         self.model_popup.render(f, f.area());
         self.session_popup.render(f, f.area());
     }
@@ -623,6 +613,41 @@ mod tests {
         let (commands, _) = mpsc::channel(10);
         let (_, events) = mpsc::channel(10);
         Tui::new(commands, events)
+    }
+
+    #[test]
+    fn paper_theme_renders_at_small_and_large_terminal_sizes() {
+        let mut tui = tui();
+        for (width, height) in [(1, 1), (12, 5), (40, 12), (120, 40)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            for popup in 0..4 {
+                tui.provider_popup.visible = popup == 1;
+                tui.model_popup.visible = popup == 2;
+                tui.session_popup.visible = popup == 3;
+                terminal
+                    .draw(|frame| tui.render(frame, frame.area()))
+                    .unwrap();
+                assert!(
+                    terminal
+                        .backend()
+                        .buffer()
+                        .content()
+                        .iter()
+                        .all(|cell| cell.bg == theme::PAPER
+                            || cell.bg == theme::SURFACE
+                            || cell.bg == theme::ACCENT)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn empty_screen_has_a_compact_header_and_task_invitation() {
+        let screen = render(&tui());
+        assert!(screen.contains("SHEHAB"));
+        assert!(screen.contains("What are we building?"));
+        assert!(screen.contains("Ask a question or describe a change"));
+        assert!(!screen.contains("┌"));
     }
 
     fn render(component: &impl Component) -> String {
@@ -651,6 +676,36 @@ mod tests {
         let before = render(&tui.footer);
         tui.update(Duration::from_millis(100));
         assert_eq!(render(&tui.footer), before);
+    }
+
+    #[test]
+    fn provider_popup_visibility_follows_actions_and_configuration() {
+        let mut tui = tui();
+        assert!(!tui.provider_popup.visible);
+        assert!(!tui.is_popup_visible());
+
+        tui.handle_model_popup_action(ModelPopupAction::Connect);
+        assert!(tui.provider_popup.visible);
+        assert!(tui.is_popup_visible());
+        tui.handle_provider_popup_action(ProviderPopupAction::None);
+        assert!(tui.provider_popup.visible);
+        tui.handle_provider_popup_action(ProviderPopupAction::Close);
+        assert!(!tui.provider_popup.visible);
+
+        tui.provider_popup.open();
+        let provider = tui.provider_popup.selected_provider();
+        tui.pending_provider = Some(provider);
+        tui.handle_app_event(AppEvent::ProviderConfigurationFailed {
+            provider,
+            error: "Connection failed".into(),
+        });
+        assert!(tui.provider_popup.visible);
+        assert!(tui.pending_provider.is_none());
+
+        tui.pending_provider = Some(provider);
+        tui.handle_app_event(AppEvent::ProviderConfigured { provider });
+        assert!(!tui.provider_popup.visible);
+        assert!(tui.pending_provider.is_none());
     }
 
     #[test]

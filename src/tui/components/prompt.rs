@@ -1,9 +1,10 @@
 use crate::tui::components::Component;
+use crate::tui::theme;
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Text};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Padding, Paragraph, Wrap};
 use ratatui_textarea::{Input, Key, TextArea, WrapMode};
 
 pub struct PromptComponent {
@@ -17,15 +18,18 @@ impl PromptComponent {
     pub fn new() -> Self {
         let mut prompt = TextArea::default();
         prompt.set_wrap_mode(WrapMode::WordOrGlyph);
-        prompt.set_block(Block::default().borders(Borders::ALL));
-        prompt.set_placeholder_text("Ask me anything..");
-        prompt.set_cursor_style(
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
+        theme::style_input(&mut prompt);
+        prompt.set_style(theme::base().bg(theme::SURFACE));
+        prompt.set_placeholder_style(theme::base().fg(theme::MUTED).bg(theme::SURFACE));
+        prompt.set_cursor_line_style(theme::base().bg(theme::SURFACE));
+        prompt.set_block(
+            Block::default()
+                .borders(Borders::BOTTOM)
+                .border_style(Style::default().fg(theme::ACCENT))
+                .style(theme::base().bg(theme::SURFACE))
+                .padding(Padding::new(3, 1, 1, 0)),
         );
-        prompt.set_cursor_line_style(Style::default());
+        prompt.set_placeholder_text("Ask a question or describe a change");
 
         Self {
             prompt,
@@ -49,7 +53,7 @@ impl PromptComponent {
             .collect();
         Paragraph::new(Text::from(lines))
             .wrap(Wrap { trim: false })
-            .line_count(available_width.saturating_sub(2).max(1))
+            .line_count(available_width.saturating_sub(4).max(1))
             .saturating_add(2)
             .clamp(3, usize::from(available_height.max(3) / 2 + 2)) as u16
     }
@@ -158,6 +162,12 @@ impl PromptComponent {
 impl Component for PromptComponent {
     fn render(&self, f: &mut Frame, area: Rect) {
         f.render_widget(&self.prompt, area);
+        if area.width > 2 && area.height > 2 {
+            f.render_widget(
+                Paragraph::new("›").style(Style::default().fg(theme::ACCENT)),
+                Rect::new(area.x + 1, area.y + 1, 1, 1),
+            );
+        }
     }
 }
 
@@ -170,7 +180,7 @@ mod tests {
         let mut prompt = PromptComponent::new();
         assert_eq!(prompt.height(12, 40), 3);
         prompt.insert_text("abcdefghijabcdefghijabcde");
-        assert_eq!(prompt.height(12, 40), 5);
+        assert_eq!(prompt.height(12, 40), 6);
         assert_eq!(prompt.height(32, 40), 3);
         assert_eq!(prompt.content(), "abcdefghijabcdefghijabcde");
     }

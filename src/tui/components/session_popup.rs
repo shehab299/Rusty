@@ -1,10 +1,11 @@
 use super::Component;
 use crate::comms::SessionSummary;
+use crate::tui::theme;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Style},
+    style::Style,
     widgets::{Block, Clear, List, ListItem, ListState, Paragraph},
 };
 use ratatui_textarea::{Input, TextArea};
@@ -26,7 +27,7 @@ impl SessionPopup {
         self.message = "Loading sessions…".into();
         self.search
             .set_placeholder_text("Search conversations or directories");
-        self.search.set_cursor_line_style(Style::default());
+        theme::style_input(&mut self.search);
     }
 
     pub fn set_sessions(&mut self, sessions: Vec<SessionSummary>) {
@@ -108,7 +109,10 @@ impl Component for SessionPopup {
         ])
         .areas(center);
         f.render_widget(Clear, area);
-        let block = Block::bordered().title("Sessions · newest first");
+        let block = Block::bordered()
+            .title("Sessions · newest first")
+            .style(theme::base())
+            .border_style(Style::default().fg(theme::RULE));
         let inner = block.inner(area);
         f.render_widget(block, area);
         let [search, list, status] = Layout::vertical([
@@ -140,13 +144,13 @@ impl Component for SessionPopup {
             f.render_stateful_widget(
                 List::new(items)
                     .highlight_symbol("› ")
-                    .highlight_style(Style::default().bg(Color::DarkGray)),
+                    .highlight_style(theme::selection()),
                 list,
                 &mut state,
             );
         }
         f.render_widget(
-            Paragraph::new(self.message.as_str()).style(Style::default().fg(Color::Cyan)),
+            Paragraph::new(self.message.as_str()).style(Style::default().fg(theme::ACCENT)),
             status,
         );
     }
